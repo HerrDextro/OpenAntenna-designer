@@ -27,7 +27,7 @@ def main() -> int:
     window = MainWindow(project)
     if path is not None:
         window.path = path
-        window._update_title()
+        window._apply_document_state()
     window.show()
     return app.exec()
 

@@ -99,14 +99,15 @@ class DocumentController(QObject):
     value_changed = Signal(str, str)
     structure_changed = Signal(str)
     model_changed = Signal()
-    selection_changed = Signal(str)
+    selection_changed = Signal(str)  # empty string means nothing selected
     units_changed = Signal(str)
 
     def __init__(self, project: Project, parent=None):
         super().__init__(parent)
         self.project = project
         self.undo_stack = QUndoStack(self)
-        self.selected = NODE_ANTENNA
+        # `selected` is None when nothing is selected: the panel shows an overview.
+        self.selected: str | None = NODE_ANTENNA
         self.built: BuiltModel = build(project)
 
     # ---- public edits -----------------------------------------------------
@@ -143,10 +144,10 @@ class DocumentController(QObject):
             self.project.units = units
             self.units_changed.emit(units)
 
-    def select(self, node_id: str):
+    def select(self, node_id: str | None):
         if node_id != self.selected:
             self.selected = node_id
-            self.selection_changed.emit(node_id)
+            self.selection_changed.emit(node_id or "")
 
     # ---- internal ---------------------------------------------------------
 
@@ -161,7 +162,7 @@ class DocumentController(QObject):
 
     def _structure_changed(self, select_node: str):
         valid = {p.id for p in self.project.parts} | set(FIXED_NODES)
-        if self.selected not in valid:
+        if self.selected is not None and self.selected not in valid:
             self.selected = NODE_ANTENNA
         self.structure_changed.emit(select_node)
         self._rebuild()

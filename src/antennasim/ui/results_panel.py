@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QAbstractItemView, QGridLayout, QGroupBox, QHeaderView, QLabel,
-                               QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
+import re
+
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QColor, QGuiApplication
+from PySide6.QtWidgets import (QAbstractItemView, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
+                               QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
                                QTabWidget, QVBoxLayout, QWidget)
 
 from ..engine import Simulation
@@ -13,8 +15,13 @@ from ..geometry.validation import ERROR, INFO, WARNING
 from ..model.materials import COAX
 from ..model.units import format_length
 from .controller import DocumentController
+from .formatting import results_text
 
 _LEVEL_STYLE = {ERROR: ("✖", "#c62828"), WARNING: ("⚠", "#b26a00"), INFO: ("ℹ", "#1565c0")}
+
+CHANGED_COLOR = "#0b6bcb"
+BASELINE_COLOR = "#7b5cd6"
+HIGHLIGHT_MS = 6000
 
 
 def _fmt_z(z: complex) -> str:
@@ -28,15 +35,40 @@ class ResultsPanel(QWidget):
         self.ctl = ctl
         self.sim: Simulation | None = None
         self.stale = True
+        self.busy = False
+        self.changed: dict[str, str] = {}  # label -> previous value
+        self.baseline = None  # compare.Reference, when comparing
+        self._last_values: dict[str, str] = {}
+        self._highlight_timer = QTimer(self, singleShot=True)
+        self._highlight_timer.timeout.connect(self._clear_highlight)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.results_box = QGroupBox("Results")
-        self.grid = QGridLayout(self.results_box)
+        box_layout = QVBoxLayout(self.results_box)
+        grid_host = QWidget()
+        self.grid = QGridLayout(grid_host)
+        self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setColumnStretch(1, 1)
         self.status = QLabel()
         self.status.setWordWrap(True)
-        layout.addWidget(self.results_box)
+        box_layout.addWidget(grid_host)
+        copy_row = QHBoxLayout()
+        copy_row.addStretch(1)
+        self.copy_button = QPushButton("Copy results")
+        self.copy_button.setToolTip("Copy these numbers as text for your notes")
+        self.copy_button.clicked.connect(self._copy_results)
+        copy_row.addWidget(self.copy_button)
+        box_layout.addLayout(copy_row)
+        # Scrolled so rows keep their height instead of overlapping when the
+        # panel is short.
+        scroll = QScrollArea()
+        scroll.setWidget(self.results_box)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setMinimumHeight(220)
+        layout.addWidget(scroll, 3)
 
         self.bottom_tabs = QTabWidget()
         self.issues = QListWidget()
@@ -45,25 +77,50 @@ class ResultsPanel(QWidget):
         self.issues.itemClicked.connect(self._issue_clicked)
         self.bottom_tabs.addTab(self.issues, "Model checks")
 
-        self.cut = QTableWidget(0, 3)
-        self.cut.setHorizontalHeaderLabels(["Item", "Qty", "Length"])
-        self.cut.verticalHeader().hide()
-        self.cut.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.cut.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.bottom_tabs.addTab(self.cut, "Cut list")
-        layout.addWidget(self.bottom_tabs, 1)
+        layout.addWidget(self.bottom_tabs, 2)
 
         ctl.model_changed.connect(self._model_changed)
         ctl.units_changed.connect(lambda _: self.refresh())
         self.refresh()
 
+    def set_baseline(self, reference):
+        """Reference whose values the results are compared against (or None)."""
+        self.baseline = reference
+        self.refresh()
+
+    def _copy_results(self):
+        QGuiApplication.clipboard().setText(
+            results_text(self.ctl.project, self._summary_rows()))
+
     def set_simulation(self, sim: Simulation | None, stale: bool = False):
         self.sim = sim
         self.stale = stale
+        self.busy = False
+        if sim is not None and not stale:
+            # Remember which values moved since the last completed run. A repeat
+            # run with identical numbers keeps the previous highlight rather than
+            # clearing it, so re-running doesn't hide what just changed.
+            new = {label: value for label, value, _ in self._summary_rows()}
+            moved = {k: v for k, v in self._last_values.items() if k in new and new[k] != v}
+            self._last_values = new
+            if moved:
+                self.changed = moved
+                self._highlight_timer.start(HIGHLIGHT_MS)
         self.refresh()
 
-    def set_status(self, text: str):
+    def set_status(self, text: str, error: bool = False):
         self.status.setText(text)
+        self.status.setStyleSheet("color: #c62828; font-weight: 600;" if error and text else "")
+
+    def set_busy(self, busy: bool):
+        self.busy = busy
+        if busy:
+            self.changed = {}
+        self.refresh()
+
+    def _clear_highlight(self):
+        self.changed = {}
+        self.refresh()
 
     def _model_changed(self):
         self.stale = True
@@ -74,30 +131,69 @@ class ResultsPanel(QWidget):
     def refresh(self):
         self._fill_results()
         self._fill_issues()
-        self._fill_cut_list()
 
     def _row(self, r: int, label: str, value: str, tip: str = ""):
         name = QLabel(label)
         val = QLabel(value)
+        if self.baseline is not None and not self.stale and not self.busy:
+            was = self.baseline.summary_rows.get(label)
+            delta = _delta_text(was, value)
+            if delta:
+                cell = QLabel(delta)
+                cell.setStyleSheet(f"color: {BASELINE_COLOR};")
+                cell.setToolTip(f"{self.baseline.name}: {was}")
+                cell.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                self.grid.addWidget(cell, r, 2)
         val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         if tip:
             name.setToolTip(tip)
             val.setToolTip(tip)
-        if self.stale:
+        if self.stale or self.busy:
             val.setStyleSheet("color: #999;")
+        elif label in self.changed:
+            val.setStyleSheet(f"color: {CHANGED_COLOR}; font-weight: 600;")
+            was = f"changed, was {self.changed[label]}"
+            val.setToolTip(f"{tip}\n{was}" if tip else was)
+            name.setStyleSheet(f"color: {CHANGED_COLOR};")
         self.grid.addWidget(name, r, 0)
         self.grid.addWidget(val, r, 1)
 
     def _fill_results(self):
         while self.grid.count():
-            item = self.grid.takeAt(0)
-            if item.widget() and item.widget() is not self.status:
-                item.widget().deleteLater()
-        if self.sim is None:
-            self.grid.addWidget(QLabel("Press Run (F5) to simulate."), 0, 0, 1, 2)
-            self.grid.addWidget(self.status, 1, 0, 1, 2)
+            widget = self.grid.takeAt(0).widget()
+            if widget is None or widget is self.status:
+                continue
+            # Unparent as well as delete: deleteLater() alone leaves the old row
+            # painted on top of the new one until the event loop catches up.
+            widget.setParent(None)
+            widget.deleteLater()
+        rows = self._summary_rows()
+        if not rows:
+            self.grid.addWidget(QLabel("Press Run (F5) to simulate."), 0, 0, 1, 3)
+            self.grid.addWidget(self.status, 1, 0, 1, 3)
             return
+        note = ""
+        if self.busy:
+            note, color = "Simulating…", "#1565c0"
+        elif self.stale:
+            note, color = "Design changed — results are outdated. Press Run (F5).", "#b26a00"
+        elif self.changed:
+            note, color = f"{len(self.changed)} value(s) changed in this run.", CHANGED_COLOR
+        offset = 0
+        if note:
+            banner = QLabel(note)
+            banner.setStyleSheet(f"color: {color};")
+            banner.setWordWrap(True)
+            self.grid.addWidget(banner, 0, 0, 1, 3)
+            offset = 1
+        for i, (label, value, tip) in enumerate(rows):
+            self._row(i + offset, label, value, tip)
+        self.grid.addWidget(self.status, len(rows) + offset, 0, 1, 3)
+
+    def _summary_rows(self) -> list[tuple[str, str, str]]:
+        if self.sim is None:
+            return []
         s = self.sim.summary
         fl = self.ctl.project.feedline
         units = self.ctl.project.units
@@ -136,13 +232,7 @@ class ResultsPanel(QWidget):
         if s.ground_loss_ohm is not None:
             rows.append(("Ground loss", f"{s.ground_loss_ohm:.1f} Ω", "Series loss resistance"))
         rows.append(("Model", f"{s.wires} wires, {s.segments} segments", ""))
-        for i, (label, value, tip) in enumerate(rows):
-            self._row(i, label, value, tip)
-        if self.stale:
-            note = QLabel("Design changed — results are outdated.")
-            note.setStyleSheet("color: #b26a00;")
-            self.grid.addWidget(note, len(rows), 0, 1, 2)
-        self.grid.addWidget(self.status, len(rows) + 1, 0, 1, 2)
+        return rows
 
     def _fill_issues(self):
         self.issues.clear()
@@ -167,15 +257,21 @@ class ResultsPanel(QWidget):
         if node:
             self.ctl.select(node)
 
-    def _fill_cut_list(self):
-        project = self.ctl.project
-        items = project.template.cut_list(project)
-        self.cut.setRowCount(len(items))
-        for r, c in enumerate(items):
-            length = format_length(c.length_m, project.units) if c.length_m > 0 else ""
-            for col, text in enumerate((c.name + (f"  ({c.note})" if c.note else ""),
-                                        str(c.quantity), length)):
-                cell = QTableWidgetItem(text)
-                if col:
-                    cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self.cut.setItem(r, col, cell)
+
+def _first_number(text: str) -> float | None:
+    match = re.search(r"[-+]?\d*\.?\d+", text.replace("−", "-"))
+    return float(match.group()) if match else None
+
+
+def _delta_text(was: str | None, now: str) -> str:
+    """Signed difference of the leading number, e.g. "(+0.12)"."""
+    if not was or was == now:
+        return ""
+    a, b = _first_number(was), _first_number(now)
+    if a is None or b is None:
+        return "(was " + was + ")"
+    diff = b - a
+    if abs(diff) < 5e-4:
+        return ""
+    digits = 3 if abs(diff) < 1 else 2
+    return f"({diff:+.{digits}f})"

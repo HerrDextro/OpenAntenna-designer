@@ -7,14 +7,16 @@ import itertools
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QTransform
+from PySide6.QtGui import (QAction, QBrush, QColor, QFont, QPainter, QPainterPath, QPen,
+                           QTransform)
 from PySide6.QtWidgets import (QGraphicsEllipseItem, QGraphicsItem, QGraphicsPathItem,
                                QGraphicsRectItem, QGraphicsScene, QGraphicsSimpleTextItem,
-                               QGraphicsView)
+                               QGraphicsView, QMenu)
 
 from ..model.document import NODE_ANTENNA
 from ..model.units import format_length
 from ..templates.base import SIDE, TOP, Handle
+from .actions import populate_part_menu
 from .controller import DocumentController
 
 KIND_COLORS = {
@@ -323,6 +325,19 @@ class DiagramView(QGraphicsView):
 
     def mouseDoubleClickEvent(self, event):
         self.fit()
+
+    def contextMenuEvent(self, event):
+        item = self.itemAt(event.pos())
+        part = item.data(_KEY_PART) if item is not None else None
+        if part:
+            self.ctl.select(part)
+        menu = QMenu(self)
+        populate_part_menu(self.ctl, menu, part)
+        menu.addSeparator()
+        fit = QAction("Fit view", menu)
+        fit.triggered.connect(self.fit)
+        menu.addAction(fit)
+        menu.exec(event.globalPos())
 
     def mousePressEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton and event.button() != Qt.MouseButton.MiddleButton:

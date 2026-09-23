@@ -54,8 +54,9 @@ LOADING_COIL = PartType(
     "loading_coil",
     "Loading coil",
     (
-        ParamSpec("height", "Position above feed", "length", 0.0, minimum=0.0,
-                  help="Distance along the vertical element from the feed point."),
+        ParamSpec("height", "Distance from feed", "length", 0.0, minimum=0.0,
+                  help="Distance along the element from the feed point. On a dipole a coil "
+                       "is placed on each leg at this distance."),
         ParamSpec("inductance", "Inductance", "inductance", 10.0, minimum=0.0),
         ParamSpec("q", "Coil Q", "float", 200.0, minimum=1.0, maximum=5000.0,
                   help="Unloaded Q. Loss resistance is X_L / Q at each frequency."),

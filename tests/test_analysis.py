@@ -7,7 +7,7 @@ from antennasim.analysis.coil import design_coil, wheeler_inductance_uh
 from antennasim.analysis.feedline import apply_feed_system, transform_through_line
 from antennasim.analysis.ground_loss import estimate_ground_loss
 from antennasim.analysis.swr import bandwidth, resonances, swr
-from antennasim.analysis.tuner import find_root
+from antennasim.analysis.tuner import find_resonance
 from antennasim.model.materials import COAX
 
 
@@ -84,12 +84,30 @@ def test_ground_loss_decreases_with_radials():
     assert estimate_ground_loss(4, 10.7, 7.0, "salt_water") < r4
 
 
-def test_find_root_bracketed_and_scanned():
-    r = find_root(lambda x: x ** 3 - 8, 0.0, 5.0, tol_x=1e-6, tol_f=1e-6)
-    assert r.converged and r.value == pytest.approx(2.0, abs=1e-4)
-    # No sign change at the ends, root inside found by scanning.
-    r = find_root(lambda x: (x - 1.0) * (x - 4.0), 0.0, 5.0, tol_x=1e-6, tol_f=1e-6)
+def _antenna_like(x: float) -> float:
+    """Reactance vs length: fundamental zero at 2, a pole at 4.5, another zero at 7."""
+    return math.tan(math.pi * (x - 2.0) / 5.0) * 100.0
+
+
+def test_find_resonance_picks_fundamental_not_higher_order():
+    # The range spans the fundamental, the antiresonance pole and the 3/4-wave zero.
+    r = find_resonance(_antenna_like, 0.5, 9.0, tol_x=1e-6, tol_f=1e-3)
     assert r.converged
-    assert min(abs(r.value - 1.0), abs(r.value - 4.0)) < 1e-3
-    r = find_root(lambda x: x * x + 1, -1.0, 1.0, tol_x=1e-6)
-    assert not r.converged
+    assert r.value == pytest.approx(2.0, abs=1e-3)
+    # Starting the range above the fundamental finds the next true zero, never the pole.
+    r = find_resonance(_antenna_like, 3.0, 9.0, tol_x=1e-6, tol_f=1e-3)
+    assert r.converged and r.value == pytest.approx(7.0, abs=1e-3)
+
+
+def test_find_resonance_reports_why_it_failed():
+    too_long = find_resonance(lambda x: 50.0 + x, 0.0, 10.0, tol_x=1e-6)
+    assert not too_long.converged and "too long" in too_long.message
+    too_short = find_resonance(lambda x: -500.0 + x, 0.0, 10.0, tol_x=1e-6)
+    assert not too_short.converged and "too short" in too_short.message
+
+
+def test_find_resonance_skips_rejected_values():
+    def f(x):
+        return float("nan") if 3.0 < x < 4.0 else x - 5.0
+    r = find_resonance(f, 0.0, 10.0, tol_x=1e-6, tol_f=1e-3)
+    assert r.converged and r.value == pytest.approx(5.0, abs=1e-3)

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -102,21 +103,16 @@ class Nec2Backend(SolverBackend):
             raise SolverError("nec2c executable not found. Build it with "
                               "'python third_party/build_nec2c.py' or set ANTENNASIM_NEC2C.")
         deck = solver_deck(request.model, list(request.sweep_mhz), request.design_mhz)
-        with tempfile.TemporaryDirectory(prefix="antsim") as tmp:
-            # nec2c limits file names to 75 characters, so use short relative names.
-            Path(tmp, "in.nec").write_text(deck)
-            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        # A failed run is retried once: writing and executing in a fresh temp
+        # directory occasionally trips over on-access virus scanners.
+        for attempt in (1, 2):
             try:
-                proc = subprocess.run([str(self.executable), "-iin.nec", "-oout.txt"],
-                                      cwd=tmp, capture_output=True, text=True,
-                                      timeout=self.timeout_s, creationflags=flags)
-            except subprocess.TimeoutExpired as e:
-                raise SolverError("NEC2 timed out") from e
-            out_path = Path(tmp, "out.txt")
-            output = out_path.read_text(errors="replace") if out_path.exists() else ""
-        if proc.returncode != 0:
-            msg = (proc.stderr or proc.stdout).strip() or f"exit code {proc.returncode}"
-            raise SolverError(f"NEC2 failed: {msg}")
+                output = self._run_deck(deck)
+                break
+            except SolverError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.2)
 
         blocks = parse_output(output)
         expected = len(request.sweep_mhz) + 1
@@ -124,3 +120,28 @@ class Nec2Backend(SolverBackend):
             raise SolverError(f"NEC2 output incomplete ({len(blocks)} of {expected} "
                               "frequencies solved)")
         return SolveResult(sweep=blocks[:-1], design=blocks[-1], raw_output=output)
+
+    def _run_deck(self, deck: str) -> str:
+        with tempfile.TemporaryDirectory(prefix="antsim") as tmp:
+            # nec2c limits file names to 75 characters, so use short relative names.
+            deck_path = Path(tmp, "in.nec")
+            deck_path.write_text(deck)
+            if not deck_path.is_file():
+                raise SolverError(f"Could not write the NEC deck to {deck_path}")
+            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            try:
+                proc = subprocess.run([str(self.executable), "-iin.nec", "-oout.txt"],
+                                      cwd=tmp, capture_output=True, text=True,
+                                      timeout=self.timeout_s, creationflags=flags)
+            except subprocess.TimeoutExpired as e:
+                raise SolverError("NEC2 timed out") from e
+            except OSError as e:
+                raise SolverError(f"Could not start NEC2: {e}") from e
+            out_path = Path(tmp, "out.txt")
+            output = out_path.read_text(errors="replace") if out_path.exists() else ""
+        if proc.returncode != 0:
+            msg = (proc.stderr or proc.stdout).strip() or f"exit code {proc.returncode}"
+            raise SolverError(f"NEC2 failed: {msg}")
+        if not output.strip():
+            raise SolverError("NEC2 produced no output")
+        return output

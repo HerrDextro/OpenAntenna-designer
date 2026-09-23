@@ -7,24 +7,15 @@ import math
 from typing import TYPE_CHECKING
 
 from ..geometry.validation import ERROR, INFO, WARNING, Issue
-from ..geometry.wire_model import Load, Source, Wire, WireModel
+from ..geometry.wire_model import Source, Wire, WireModel
 from ..model.document import NODE_ANTENNA, NODE_ENVIRONMENT
 from ..model.params import ParamSpec
-from .base import (SIDE, TOP, AntennaTemplate, BuildContext, CutItem, Decoration, Dimension, Handle,
-                   Tunable)
+from ..model.units import wavelength_m
+from .base import (EPS as _EPS, SIDE, TOP, AntennaTemplate, BuildContext, CutItem, Decoration,
+                   Dimension, Handle, Tunable, add_run, max_coil_uh, polar_point as _polar)
 
 if TYPE_CHECKING:
     from ..model.document import Project
-
-_EPS = 1e-6
-
-
-def _polar(length: float, azimuth_deg: float, droop_deg: float, origin):
-    az, dr = math.radians(azimuth_deg), math.radians(droop_deg)
-    horiz = length * math.cos(dr)
-    return (origin[0] + horiz * math.cos(az),
-            origin[1] + horiz * math.sin(az),
-            origin[2] - length * math.sin(dr))
 
 
 class MonopoleTemplate(AntennaTemplate):
@@ -71,38 +62,10 @@ class MonopoleTemplate(AntennaTemplate):
         radius = a["diameter"] / 2
         height = a["height"]
 
-        # Split the vertical where a loading coil sits; the coil is a short
-        # single-segment wire carrying the RLC load.
         coil = project.first_part("loading_coil")
-        cuts: list[tuple[float, float]] = []
-        if coil is not None:
-            coil_len = min(ctx.segment_length, height / 3)
-            z0 = min(max(coil.params["height"] - coil_len / 2, 0.0), height - coil_len)
-            cuts.append((z0, z0 + coil_len))
-
-        z = 0.0
-        sections: list[tuple[float, float, bool]] = []
-        for c0, c1 in cuts:
-            if c0 - z > _EPS:
-                sections.append((z, c0, False))
-            sections.append((c0, c1, True))
-            z = c1
-        if height - z > _EPS:
-            sections.append((z, height, False))
-
-        first_vertical = None
-        for z0, z1, is_coil in sections:
-            wire = Wire((0.0, 0.0, base[2] + z0), (0.0, 0.0, base[2] + z1), radius,
-                        "Loading coil" if is_coil else "Vertical element",
-                        part_id=coil.id if is_coil else NODE_ANTENNA,
-                        segments=1 if is_coil else 0)
-            idx = model.add_wire(wire)
-            if first_vertical is None:
-                first_vertical = idx
-            if is_coil:
-                model.loads.append(Load(idx, 0.5, l_uh=coil.params["inductance"],
-                                        q=coil.params["q"], name="Loading coil",
-                                        part_id=coil.id))
+        first_vertical = add_run(model, base, (base[0], base[1], base[2] + height), radius,
+                                 "Vertical element", ctx, NODE_ANTENNA, coil,
+                                 coil.params["height"] if coil else 0.0)
         model.source = Source(first_vertical, 0.0)
 
         if a["top_length"] > _EPS:
@@ -289,21 +252,23 @@ class MonopoleTemplate(AntennaTemplate):
         return items
 
     def tunables(self, project: "Project") -> list[Tunable]:
+        # Ranges scale with wavelength and stop short of the half-wave
+        # antiresonance, so tuning finds the fundamental resonance.
         a = project.antenna
-        out = [Tunable(NODE_ANTENNA, "height", "Vertical length", 0.1, max(a["height"] * 3, 1.0))]
+        lam = wavelength_m(project.simulation["design_mhz"])
+        out = [Tunable(NODE_ANTENNA, "height", "Vertical length", 0.01 * lam, 0.45 * lam)]
         if a["top_length"] > _EPS:
             out.append(Tunable(NODE_ANTENNA, "top_length", "Horizontal section", 0.0,
-                               max(a["top_length"] * 3, 1.0)))
+                               0.45 * lam))
         coil = project.first_part("loading_coil")
         if coil is not None:
             out.append(Tunable(coil.id, "inductance", "Coil inductance", 0.0,
-                               max(coil.params["inductance"] * 5, 50.0)))
+                               max_coil_uh(project.simulation["design_mhz"])))
         hat = project.first_part("top_hat")
         if hat is not None:
-            out.append(Tunable(hat.id, "length", "Top hat spoke length", 0.05,
-                               max(hat.params["length"] * 3, 1.0)))
+            out.append(Tunable(hat.id, "length", "Top hat spoke length", 0.005 * lam,
+                               0.25 * lam))
         radials = project.first_part("radials")
         if radials is not None and radials.params["mode"] == "wires":
-            out.append(Tunable(radials.id, "length", "Radial length", 0.1,
-                               max(radials.params["length"] * 3, 1.0)))
+            out.append(Tunable(radials.id, "length", "Radial length", 0.02 * lam, 0.45 * lam))
         return out

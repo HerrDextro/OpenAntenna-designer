@@ -42,13 +42,24 @@ class SweepPlots(QWidget):
         self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.message)
 
-    def show_simulation(self, sim: Simulation | None, threshold: float = 2.0):
+    def show_simulation(self, sim: Simulation | None, threshold: float = 2.0,
+                        references: list = ()):
         self.swr_plot.clear()
         self.z_plot.clear()
         if sim is None:
             self.message.show()
             return
         self.message.hide()
+        for ref in references:
+            pen = _pen(ref.color, 1.5, Qt.PenStyle.DashLine)
+            self.swr_plot.plot(ref.simulation.freqs,
+                               np.minimum(ref.simulation.swr_rig, 10.0), pen=pen,
+                               name=f"{ref.name} (SWR)")
+            self.z_plot.plot(ref.simulation.freqs, ref.simulation.z_antenna.real, pen=pen,
+                             name=f"{ref.name} (R)")
+            self.z_plot.plot(ref.simulation.freqs, ref.simulation.z_antenna.imag,
+                             pen=_pen(ref.color, 1.5, Qt.PenStyle.DotLine),
+                             name=f"{ref.name} (X)")
         f = sim.freqs
         clip = lambda s: np.minimum(s, 10.0)  # noqa: E731
         self.swr_plot.plot(f, clip(sim.swr_feedpoint), pen=_pen(BLUE), name="At feed point")
@@ -58,6 +69,11 @@ class SweepPlots(QWidget):
         self.swr_plot.addItem(pg.InfiniteLine(sim.summary.design_mhz, angle=90,
                                               pen=_pen("#d62728", 1, Qt.PenStyle.DashLine)))
         self.swr_plot.setYRange(1, min(max(float(np.max(clip(sim.swr_rig))), threshold) * 1.05, 10.5))
+        # Refit the frequency axis: otherwise a zoomed-in view survives the run and
+        # shows a sliver of the curve. References may span a different sweep.
+        f_lo = min([float(f[0])] + [float(r.simulation.freqs[0]) for r in references])
+        f_hi = max([float(f[-1])] + [float(r.simulation.freqs[-1]) for r in references])
+        self.swr_plot.setXRange(f_lo, f_hi, padding=0.02)
 
         z = sim.z_antenna
         self.z_plot.plot(f, z.real, pen=_pen(BLUE), name="R")
@@ -66,6 +82,8 @@ class SweepPlots(QWidget):
         self.z_plot.addItem(pg.InfiniteLine(0, angle=0, pen=_pen(GREY, 1)))
         self.z_plot.addItem(pg.InfiniteLine(sim.summary.design_mhz, angle=90,
                                             pen=_pen("#d62728", 1, Qt.PenStyle.DashLine)))
+        self.z_plot.setXRange(f_lo, f_hi, padding=0.02)
+        self.z_plot.enableAutoRange(axis="y")
 
 
 class PolarPlot(pg.PlotWidget):
@@ -88,7 +106,7 @@ class PolarPlot(pg.PlotWidget):
         a = np.radians(angles_deg)
         return r * np.cos(a), r * np.sin(a)
 
-    def show_cut(self, angles_deg, gains, g_ref: float, label: str):
+    def show_cut(self, angles_deg, gains, g_ref: float, label: str, extra: list = ()):
         self.clear()
         a_max = 180 if self.half else 360
         ring_angles = np.linspace(0, a_max, 181)
@@ -114,6 +132,9 @@ class PolarPlot(pg.PlotWidget):
             self.addItem(t)
         if self.half:
             self.plot([-1.05, 1.05], [0, 0], pen=_pen("#8b6f47", 2))
+        for ref_angles, ref_gains, color, name in extra:
+            rx, ry = self._xy(ref_angles, ref_gains, g_ref)
+            self.plot(rx, ry, pen=_pen(color, 1.5, Qt.PenStyle.DashLine), name=name)
         x, y = self._xy(angles_deg, gains, g_ref)
         self.plot(x, y, pen=_pen(BLUE, 2.5))
         self.setXRange(-1.25, 1.25, padding=0)
@@ -135,7 +156,7 @@ class PatternPlots(QWidget):
         self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.message)
 
-    def show_simulation(self, sim: Simulation | None):
+    def show_simulation(self, sim: Simulation | None, references: list = ()):
         if sim is None:
             self.elevation.clear()
             self.azimuth.clear()
@@ -145,8 +166,18 @@ class PatternPlots(QWidget):
         p, s = sim.pattern, sim.summary
         free_space = p.theta_deg[-1] > 90
         self.elevation.half = not free_space
+        # All curves share the live design's reference level so gains compare directly.
+        extra_el, extra_az = [], []
+        for ref in references:
+            rp = ref.simulation.pattern
+            extra_el.append((*pattern_analysis.elevation_cut(rp, s.max_azimuth_deg),
+                             ref.color, ref.name))
+            extra_az.append((*pattern_analysis.azimuth_cut(rp, max(s.takeoff_deg, 0.0)),
+                             ref.color, ref.name))
         angles, gains = pattern_analysis.elevation_cut(p, s.max_azimuth_deg)
         self.elevation.show_cut(angles, gains, s.max_gain_dbi,
-                                f"Azimuth {s.max_azimuth_deg:.0f}°, take-off {s.takeoff_deg:.1f}°")
+                                f"Azimuth {s.max_azimuth_deg:.0f}°, take-off {s.takeoff_deg:.1f}°",
+                                extra_el)
         az, g_az = pattern_analysis.azimuth_cut(p, max(s.takeoff_deg, 0.0))
-        self.azimuth.show_cut(az, g_az, s.max_gain_dbi, f"Elevation {s.takeoff_deg:.0f}°")
+        self.azimuth.show_cut(az, g_az, s.max_gain_dbi, f"Elevation {s.takeoff_deg:.0f}°",
+                              extra_az)

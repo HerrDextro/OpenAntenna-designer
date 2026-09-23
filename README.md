@@ -23,6 +23,7 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
 - **2D diagram editor.**
   - Side and top views with draggable handles and live dimension lines.
   - A part tree on the left and a properties panel on the right.
+  - Deselect everything (click empty space in the tree, or press Escape) for an **overview** of every setting at once.
 - **Environment:**
   - free space, perfect ground, or real soil (presets from city ground to salt water)
   - wire material: copper, aluminium, steel and more
@@ -41,11 +42,13 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
   - SWR and impedance sweeps
   - elevation and azimuth polar patterns
   - a 3D view showing current distribution and the pattern surface
+- **Comparisons:** save the current design as a reference, change something, and the plots overlay both while the results show the difference beside each value.
+- **Copy to clipboard:** settings, results and the cut list all copy as plain text for your notes.
 
 ### Tools
 - **Tune to resonance:** automatically adjusts element length, coil inductance, top hat or radial length.
 - **Coil calculator:** turns, coil length and wire needed for a target inductance.
-- **Cut list:** everything you need to cut before you build.
+- **Cut list:** its own tab with everything you need to cut before you build.
 - **Model checks:** warnings when a design breaks NEC2's modeling rules, so you don't trust bad numbers.
 - **NEC export:** writes a `.nec` deck to cross-check your design in 4nec2 or other NEC tools.
 

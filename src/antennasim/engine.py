@@ -12,7 +12,7 @@ from .analysis.farfield import compute_pattern
 from .analysis.feedline import FeedResult, apply_feed_system
 from .analysis.ground_loss import estimate_ground_loss
 from .analysis.swr import bandwidth, resonances, swr
-from .analysis.tuner import TuneResult, find_root
+from .analysis.tuner import TuneResult, find_resonance
 from .geometry.segmentation import segment, target_segment_length
 from .geometry.validation import ERROR, INFO, Issue, validate_model
 from .geometry.wire_model import GroundModel, Load, WireModel
@@ -199,7 +199,11 @@ def tune(project: Project, tunable: Tunable, backend: SolverBackend,
     def reactance(value: float) -> float:
         trial = project.clone()
         trial.set_value(tunable.node_id, tunable.key, value)
-        return solve_impedance(trial, backend, target).imag
+        try:
+            return solve_impedance(trial, backend, target).imag
+        except SimulationBlocked:
+            # e.g. a trial radial length that dips below ground; skip that point.
+            return float("nan")
 
     span = tunable.maximum - tunable.minimum
-    return find_root(reactance, tunable.minimum, tunable.maximum, tol_x=span * 1e-4)
+    return find_resonance(reactance, tunable.minimum, tunable.maximum, tol_x=span * 1e-5)

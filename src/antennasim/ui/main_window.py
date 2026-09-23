@@ -8,8 +8,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QDockWidget, QDoubleSpinBox, QFileDialog, QLabel,
-                               QMainWindow, QMenu, QMessageBox, QSplitter, QTabWidget,
-                               QToolBar, QToolButton, QWidget)
+                               QMainWindow, QMenu, QMessageBox, QProgressBar, QSplitter,
+                               QStackedWidget, QTabWidget, QToolBar, QToolButton, QWidget)
 
 from ..engine import SimulationBlocked, simulate
 from ..fileio.nec_export import export_nec
@@ -20,7 +20,9 @@ from ..model.units import IMPERIAL, METRIC
 from ..solver.nec2_backend import Nec2Backend
 from ..templates import all_templates
 from ..templates.base import SIDE, TOP
+from .compare import ComparePanel, ReferenceStore
 from .controller import DocumentController
+from .cut_list_view import CutListView
 from .diagram import DiagramView
 from .part_tree import PartTree
 from .plots import PatternPlots, SweepPlots
@@ -28,8 +30,10 @@ from .properties_panel import PropertiesPanel
 from .results_panel import ResultsPanel
 from .tools import CoilDialog, TuneDialog
 from .view3d import View3D
+from .welcome import WelcomeView
 
 FILE_FILTER = f"AntennaSim project (*{EXTENSION})"
+WATCHDOG_MS = 120_000  # a solve that never reports back must not freeze the UI
 
 
 class _SimSignals(QObject):
@@ -56,13 +60,20 @@ class MainWindow(QMainWindow):
     def __init__(self, project: Project | None = None):
         super().__init__()
         self.backend = Nec2Backend()
+        # A placeholder project keeps the panels valid while the empty state is
+        # shown; `has_document` says whether the user actually has a design open.
         self.ctl = DocumentController(project or Project.new("monopole"), self)
+        self.references = ReferenceStore(self)
+        self.has_document = project is not None
         self.path: Path | None = None
         self.sim = None
         self._generation = itertools.count(1)
         self._latest = 0
         self._running = False
         self._rerun = False
+        # Jobs must be referenced while they run: if Python collects the job its
+        # signal object dies with it and the result never arrives.
+        self._jobs: set[_SimJob] = set()
         self.settings = QSettings("AntennaSim", "AntennaSim")
 
         self._build_central()
@@ -72,23 +83,39 @@ class MainWindow(QMainWindow):
 
         self.auto_timer = QTimer(self, singleShot=True, interval=400)
         self.auto_timer.timeout.connect(self.run_simulation)
+        self.watchdog = QTimer(self, singleShot=True, interval=WATCHDOG_MS)
+        self.watchdog.timeout.connect(self._watchdog_fired)
         self.ctl.model_changed.connect(self._on_model_changed)
         self.ctl.value_changed.connect(self._on_value_changed)
         self.ctl.selection_changed.connect(lambda _: self._update_part_actions())
         self.ctl.undo_stack.cleanChanged.connect(lambda _: self._update_title())
         self.ctl.units_changed.connect(self._sync_units_actions)
+        self.references.changed.connect(self._refresh_comparison)
 
+        self.busy_bar = QProgressBar()
+        self.busy_bar.setRange(0, 0)  # indeterminate
+        self.busy_bar.setMaximumWidth(140)
+        self.busy_bar.setTextVisible(False)
+        self.busy_bar.hide()
+        self.busy_label = QLabel()
+        self.statusBar().addPermanentWidget(self.busy_label)
+        self.statusBar().addPermanentWidget(self.busy_bar)
         self.statusBar().showMessage(f"Solver: {self.backend.name}"
                                      if self.backend.executable else
                                      "nec2c not found — build it with third_party/build_nec2c.py")
         self.resize(1500, 900)
-        self._update_title()
+        self._apply_document_state()
         self._refresh_views()
-        QTimer.singleShot(0, self.run_simulation)
+        if self.has_document:
+            QTimer.singleShot(0, self.run_simulation)
 
     # ---- layout -------------------------------------------------------------
 
     def _build_central(self):
+        self.stack = QStackedWidget()
+        self.welcome = WelcomeView()
+        self.welcome.template_chosen.connect(self.new_project)
+        self.welcome.open_requested.connect(self.open_project)
         self.tabs = QTabWidget()
         split = QSplitter(Qt.Orientation.Horizontal)
         self.side_view = DiagramView(self.ctl, SIDE)
@@ -103,11 +130,15 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.pattern_plots, "Pattern")
         self.view3d = View3D()
         self.tabs.addTab(self.view3d, "3D")
-        self.setCentralWidget(self.tabs)
+        self.cut_list = CutListView(self.ctl)
+        self.tabs.addTab(self.cut_list, "Cut list")
+        self.stack.addWidget(self.welcome)
+        self.stack.addWidget(self.tabs)
+        self.setCentralWidget(self.stack)
 
     def _build_docks(self):
         self.tree = PartTree(self.ctl)
-        left = QDockWidget("Parts", self)
+        left = self.left_dock = QDockWidget("Parts", self)
         left.setObjectName("parts")
         left.setWidget(self.tree)
         left.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
@@ -116,15 +147,18 @@ class MainWindow(QMainWindow):
         right_split = QSplitter(Qt.Orientation.Vertical)
         self.properties = PropertiesPanel(self.ctl)
         self.results = ResultsPanel(self.ctl)
+        self.compare_panel = ComparePanel(self.references)
+        self.compare_panel.add_button.clicked.connect(self.save_reference)
+        self.results.bottom_tabs.addTab(self.compare_panel, "Compare")
         right_split.addWidget(self.properties)
         right_split.addWidget(self.results)
         right_split.setSizes([330, 570])
-        right = QDockWidget("Info", self)
+        right = self.right_dock = QDockWidget("Info", self)
         right.setObjectName("info")
         right.setWidget(right_split)
         right.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, right)
-        self.resizeDocks([left, right], [220, 380], Qt.Orientation.Horizontal)
+        self.resizeDocks([left, right], [220, 430], Qt.Orientation.Horizontal)
 
     def _action(self, text, slot, shortcut=None, tip=""):
         act = QAction(text, self)
@@ -142,6 +176,9 @@ class MainWindow(QMainWindow):
         self.act_save_as = self._action("Save as…", self.save_project_as, QKeySequence.StandardKey.SaveAs)
         self.act_export = self._action("Export NEC deck…", self.export_nec,
                                        tip="Export a .nec file to cross-check in 4nec2 or similar")
+        self.act_close = self._action("Close design", self.close_document,
+                                      QKeySequence.StandardKey.Close,
+                                      tip="Close the design and return to the start screen")
         self.act_quit = self._action("Quit", self.close, QKeySequence.StandardKey.Quit)
         self.act_undo = self.ctl.undo_stack.createUndoAction(self, "Undo")
         self.act_undo.setShortcut(QKeySequence.StandardKey.Undo)
@@ -151,6 +188,9 @@ class MainWindow(QMainWindow):
         self.act_run = self._action("▶ Run", self.run_simulation, "F5", "Run the NEC2 simulation (F5)")
         self.act_tune = self._action("Tune…", self.open_tuner, tip="Tune a parameter for resonance")
         self.act_coil = self._action("Coil calculator…", self.open_coil_calculator)
+        self.act_reference = self._action(
+            "Save reference", self.save_reference, "Ctrl+R",
+            tip="Remember this design and its results, then compare later changes against it")
         self.act_fit = self._action("Fit diagram", self._fit_views, "F")
 
         self.part_actions = {}
@@ -174,7 +214,8 @@ class MainWindow(QMainWindow):
 
         menu_file = self.menuBar().addMenu("&File")
         menu_file.addMenu(new_menu)
-        for a in (self.act_open, self.act_save, self.act_save_as, None, self.act_export, None, self.act_quit):
+        for a in (self.act_open, self.act_save, self.act_save_as, None, self.act_export,
+                  self.act_close, None, self.act_quit):
             menu_file.addSeparator() if a is None else menu_file.addAction(a)
         menu_edit = self.menuBar().addMenu("&Edit")
         for a in (self.act_undo, self.act_redo, None, self.act_remove):
@@ -183,7 +224,7 @@ class MainWindow(QMainWindow):
         for a in self.part_actions.values():
             self.menu_insert.addAction(a)
         menu_sim = self.menuBar().addMenu("&Simulate")
-        for a in (self.act_run, self.act_tune, self.act_coil):
+        for a in (self.act_run, self.act_tune, self.act_coil, self.act_reference):
             menu_sim.addAction(a)
         menu_view = self.menuBar().addMenu("&View")
         menu_view.addAction(self.act_fit)
@@ -234,6 +275,7 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addAction(self.act_tune)
         tb.addAction(self.act_coil)
+        tb.addAction(self.act_reference)
 
     # ---- document events ------------------------------------------------------
 
@@ -241,7 +283,7 @@ class MainWindow(QMainWindow):
         self._refresh_views()
         self._update_part_actions()
         self._update_title()
-        if self.auto_run.isChecked():
+        if self.has_document and self.auto_run.isChecked():
             self.auto_timer.start()
 
     def _on_value_changed(self, node_id, key):
@@ -260,14 +302,54 @@ class MainWindow(QMainWindow):
     def _update_part_actions(self):
         project = self.ctl.project
         for kind, act in self.part_actions.items():
-            act.setVisible(kind in project.template.allowed_parts)
-            act.setEnabled(project.can_add_part(kind))
-        self.act_remove.setEnabled(self.ctl.selected in {p.id for p in project.parts})
+            act.setVisible(self.has_document and kind in project.template.allowed_parts)
+            act.setEnabled(self.has_document and project.can_add_part(kind))
+        self.act_remove.setEnabled(self.has_document
+                                   and self.ctl.selected in {p.id for p in project.parts})
+
+    def _apply_document_state(self):
+        """Switch between the empty state and an open design."""
+        open_doc = self.has_document
+        self.stack.setCurrentIndex(1 if open_doc else 0)
+        self.left_dock.setVisible(open_doc)
+        self.right_dock.setVisible(open_doc)
+        for act in (self.act_save, self.act_save_as, self.act_export, self.act_close,
+                    self.act_run, self.act_tune, self.act_coil, self.act_fit,
+                    self.act_reference, self.act_undo, self.act_redo):
+            act.setEnabled(open_doc)
+        self.freq_spin.setEnabled(open_doc)
+        self.auto_run.setEnabled(open_doc)
+        self._update_part_actions()
+        self._update_title()
+
+    def close_document(self):
+        """Close the current design and return to the empty state."""
+        if not self.has_document or not self._confirm_discard():
+            return
+        self.auto_timer.stop()
+        self.watchdog.stop()
+        self.has_document = False
+        self.path = None
+        self.sim = None
+        self.references.clear()
+        self._rerun = False
+        self.ctl.set_project(Project.new(self.ctl.project.template_id))
+        self.results.set_simulation(None)
+        self.results.set_status("")
+        self.sweep_plots.show_simulation(None)
+        self.pattern_plots.show_simulation(None)
+        self.view3d.set_simulation(None)
+        self._set_busy(False)
+        self._apply_document_state()
+        self.statusBar().showMessage("Design closed", 4000)
 
     def _sync_units_actions(self, units):
         (self.act_imperial if units == IMPERIAL else self.act_metric).setChecked(True)
 
     def _update_title(self):
+        if not self.has_document:
+            self.setWindowTitle("AntennaSim")
+            return
         name = self.path.name if self.path else "Untitled"
         dirty = "" if self.ctl.undo_stack.isClean() else " •"
         self.setWindowTitle(f"{name}{dirty} — AntennaSim")
@@ -279,45 +361,106 @@ class MainWindow(QMainWindow):
     # ---- simulation -------------------------------------------------------------
 
     def run_simulation(self):
+        if not self.has_document:
+            return
         if self._running:
             self._rerun = True
             return
         if self.ctl.built.has_errors:
             self.results.set_simulation(self.sim, stale=True)
-            self.results.set_status("Fix the errors under Model checks to simulate.")
+            self.results.set_status("Fix the errors under Model checks to simulate.", error=True)
+            self.statusBar().showMessage("Model has errors — see Model checks.", 8000)
             return
         self._running = True
         self._latest = next(self._generation)
         job = _SimJob(self._latest, self.ctl.project.clone(), self.backend)
         job.signals.done.connect(self._sim_done)
         job.signals.failed.connect(self._sim_failed)
-        self.statusBar().showMessage("Simulating…")
+        job.signals.done.connect(lambda *_, j=job: self._jobs.discard(j))
+        job.signals.failed.connect(lambda *_, j=job: self._jobs.discard(j))
+        self._jobs.add(job)
+        self._set_busy(True)
         QThreadPool.globalInstance().start(job)
+
+    def _set_busy(self, busy: bool):
+        self.busy_bar.setVisible(busy)
+        self.busy_label.setText("Solving…" if busy else "")
+        self.results.set_busy(busy)
+        # Run stays enabled on purpose: if a solve is ever lost, the user can
+        # always start another one instead of facing a dead button.
+        if busy:
+            self.watchdog.start()
+        else:
+            self.watchdog.stop()
+
+    def _watchdog_fired(self):
+        if self._running:
+            self._sim_failed(self._latest, "The solver did not respond. Press Run to try again.")
 
     def _finish_run(self):
         self._running = False
         if self._rerun:
             self._rerun = False
             self.run_simulation()
+        else:
+            self._set_busy(False)
 
     def _sim_done(self, generation, sim):
+        if generation != self._latest:  # a superseded run must not overwrite newer results
+            self._finish_run()
+            return
         self.sim = sim
         stale = self._rerun
         self.results.set_simulation(sim, stale=stale)
         self.results.set_status("")
-        self.sweep_plots.show_simulation(sim, self.ctl.project.simulation["swr_threshold"])
-        self.pattern_plots.show_simulation(sim)
+        shown = self.references.visible()
+        self.sweep_plots.show_simulation(sim, self.ctl.project.simulation["swr_threshold"], shown)
+        self.pattern_plots.show_simulation(sim, shown)
         self.view3d.set_model(sim.built.model)
         self.view3d.set_simulation(sim)
+        changed = len(self.results.changed)
+        note = f", {changed} value(s) changed" if changed else ""
         self.statusBar().showMessage(
-            f"Simulated {len(sim.freqs) + 1} frequencies, {sim.summary.segments} segments", 5000)
+            f"Simulated {len(sim.freqs) + 1} frequencies, "
+            f"{sim.summary.segments} segments{note}", 6000)
         self._finish_run()
 
     def _sim_failed(self, generation, message):
+        if generation != self._latest and self._running:
+            self._finish_run()
+            return
         self.results.set_simulation(self.sim, stale=True)
-        self.results.set_status(message)
-        self.statusBar().showMessage(message, 8000)
+        self.results.set_status(message, error=True)
+        self.statusBar().showMessage(message, 15000)
         self._finish_run()
+
+    def save_reference(self):
+        """Snapshot the current design and results to compare later changes against."""
+        if self.sim is None:
+            self.statusBar().showMessage("Run a simulation before saving a reference.", 5000)
+            return
+        if not self.references.can_add():
+            self.statusBar().showMessage("Remove a reference first.", 5000)
+            return
+        rows = {label: value for label, value, _ in self.results._summary_rows()}
+        name = self.path.stem if self.path else f"Ref {len(self.references.references) + 1}"
+        if any(r.name == name for r in self.references.references):
+            name = f"{name} ({len(self.references.references) + 1})"
+        self.references.add(name, self.ctl.project, self.sim, rows)
+        self.results.bottom_tabs.setCurrentWidget(self.compare_panel)
+        self.statusBar().showMessage(f"Saved reference “{name}”", 5000)
+
+    def _refresh_comparison(self):
+        shown = self.references.visible()
+        count = len(self.references.references)
+        self.results.bottom_tabs.setTabText(
+            self.results.bottom_tabs.indexOf(self.compare_panel),
+            f"Compare ({count})" if count else "Compare")
+        self.results.set_baseline(self.references.baseline())
+        if self.sim is not None:
+            self.sweep_plots.show_simulation(self.sim,
+                                             self.ctl.project.simulation["swr_threshold"], shown)
+            self.pattern_plots.show_simulation(self.sim, shown)
 
     def open_tuner(self):
         if self.backend.executable is None:
@@ -347,6 +490,9 @@ class MainWindow(QMainWindow):
     def _load(self, project: Project, path: Path | None):
         self.path = path
         self.sim = None
+        self.references.clear()
+        self.has_document = True
+        self._apply_document_state()
         self.ctl.set_project(project)
         self.freq_spin.blockSignals(True)
         self.freq_spin.setValue(project.simulation["design_mhz"])
@@ -414,7 +560,14 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Exported {name}", 4000)
 
     def closeEvent(self, event):
-        if self._confirm_discard():
-            event.accept()
-        else:
+        if not self._confirm_discard():
             event.ignore()
+            return
+        # Stop signals that would otherwise fire while the window is torn down.
+        self.watchdog.stop()
+        self.auto_timer.stop()
+        try:
+            self.ctl.undo_stack.cleanChanged.disconnect()
+        except RuntimeError:
+            pass
+        event.accept()

@@ -27,6 +27,8 @@ def all_templates() -> list[AntennaTemplate]:
 
 
 def _load() -> None:
+    from .dipole import DipoleTemplate
     from .monopole import MonopoleTemplate
 
     _register(MonopoleTemplate())
+    _register(DipoleTemplate())

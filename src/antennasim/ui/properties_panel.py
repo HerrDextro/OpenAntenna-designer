@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QSignalBlocker
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QLabel,
-                               QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QLabel,
+                               QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 
 from ..model.params import ParamSpec
 from ..model.units import from_display, to_display, unit_label
 from .controller import DocumentController
+from .formatting import node_sections, settings_text
 
 _DECIMALS = {"length": 3, "small_length": 2, "angle": 1, "frequency": 4, "inductance": 3,
              "resistance": 2, "float": 3}
@@ -25,29 +27,49 @@ class PropertiesPanel(QWidget):
         self.form_host = QWidget()
         self.form = QFormLayout(self.form_host)
         self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self.copy_button = QPushButton("Copy all settings")
+        self.copy_button.setToolTip("Copy every setting of this design to the clipboard")
+        self.copy_button.clicked.connect(self._copy_settings)
+        # Scrolled: the overview lists every setting and must never squash rows.
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.addWidget(self.title)
+        inner_layout.addWidget(self.form_host)
+        inner_layout.addWidget(self.copy_button)
+        inner_layout.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidget(inner)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         layout = QVBoxLayout(self)
-        layout.addWidget(self.title)
-        layout.addWidget(self.form_host)
-        layout.addStretch(1)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll)
         self.editors: dict[str, tuple[ParamSpec, QWidget, QLabel]] = {}
         self.node_id = ""
 
         ctl.selection_changed.connect(self.show_node)
         ctl.structure_changed.connect(lambda _: self.show_node(ctl.selected))
+        ctl.model_changed.connect(lambda: self.node_id or self._show_overview())
         ctl.value_changed.connect(self._on_value_changed)
         ctl.units_changed.connect(lambda _: self.show_node(self.node_id))
         self.show_node(ctl.selected)
 
     # ---- construction ------------------------------------------------------
 
-    def show_node(self, node_id: str):
+    def show_node(self, node_id: str | None):
         project = self.ctl.project
+        if not node_id:
+            self._show_overview()
+            return
         try:
             specs = project.node_specs(node_id)
         except KeyError:
             node_id = "antenna"
             specs = project.node_specs(node_id)
         self.node_id = node_id
+        self.copy_button.hide()
         while self.form.rowCount():
             self.form.removeRow(0)
         self.editors.clear()
@@ -67,6 +89,36 @@ class PropertiesPanel(QWidget):
             self.editors[spec.key] = (spec, editor, label)
             self._load(spec.key, values[spec.key])
         self._update_visibility()
+
+    def _show_overview(self):
+        """Everything deselected: list every setting of the design, compactly."""
+        self.node_id = ""
+        while self.form.rowCount():
+            self.form.removeRow(0)
+        self.editors.clear()
+        project = self.ctl.project
+        self.title.setText("Overview — all settings")
+        first = True
+        for section, rows in node_sections(project):
+            header = QLabel(section)
+            header.setStyleSheet("font-weight: 600; padding-top: %dpx;" % (0 if first else 8))
+            first = False
+            self.form.addRow(header)
+            line = QFrame()
+            line.setFrameShape(QFrame.Shape.HLine)
+            line.setStyleSheet("color: palette(midlight);")
+            self.form.addRow(line)
+            for label, value in rows:
+                name = QLabel(label)
+                name.setStyleSheet("color: palette(dark);")
+                field = QLabel(value)
+                field.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                field.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.form.addRow(name, field)
+        self.copy_button.show()
+
+    def _copy_settings(self):
+        QGuiApplication.clipboard().setText(settings_text(self.ctl.project))
 
     def _make_editor(self, spec: ParamSpec) -> QWidget:
         units = self.ctl.project.units
@@ -134,6 +186,9 @@ class PropertiesPanel(QWidget):
         self.ctl.set_value(self.node_id, key, value, merge_token=token)
 
     def _on_value_changed(self, node_id: str, key: str):
+        if not self.node_id:  # overview shows every value, so refresh it wholesale
+            self._show_overview()
+            return
         if node_id != self.node_id or key not in self.editors:
             return
         self._load(key, self.ctl.project.node_values(node_id)[key])

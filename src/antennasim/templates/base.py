@@ -7,12 +7,13 @@ the UI draws the wire model projection and the handles described here.
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..geometry.validation import Issue
-from ..geometry.wire_model import WireModel
+from ..geometry.wire_model import Vec3, WireModel
 from ..model.params import ParamSpec
 
 if TYPE_CHECKING:
@@ -22,6 +23,23 @@ Vec2 = tuple[float, float]
 
 SIDE = "side"  # x horizontal, z vertical
 TOP = "top"  # x horizontal, y vertical
+
+EPS = 1e-6
+
+
+def max_coil_uh(freq_mhz: float, max_reactance_ohm: float = 5000.0) -> float:
+    """Upper inductance bound for tuning: a coil reactance of a few kΩ covers even
+    very short loaded antennas."""
+    return max_reactance_ohm / (2 * math.pi * freq_mhz)
+
+
+def polar_point(length: float, azimuth_deg: float, droop_deg: float, origin: Vec3) -> Vec3:
+    """Point `length` away from origin at an azimuth, sloping down by `droop_deg`."""
+    az, dr = math.radians(azimuth_deg), math.radians(droop_deg)
+    horiz = length * math.cos(dr)
+    return (origin[0] + horiz * math.cos(az),
+            origin[1] + horiz * math.sin(az),
+            origin[2] - length * math.sin(dr))
 
 
 @dataclass(frozen=True)
@@ -54,6 +72,46 @@ class Dimension:
     value_m: float
     label: str = ""
     offset_px: float = 0.0  # perpendicular screen offset, positive = left of p1->p2
+
+
+def add_run(model: WireModel, p1: Vec3, p2: Vec3, radius: float, name: str, ctx: "BuildContext",
+            part_id: str = "antenna", coil=None, coil_distance: float = 0.0) -> int:
+    """Add a straight conductor from p1 to p2, optionally broken by a loading coil.
+
+    The coil becomes a short single-segment wire carrying a series RLC load, as
+    long as a normal segment so NEC2 sees a uniform segmentation. Returns the
+    index of the first wire added.
+    """
+    from ..geometry.wire_model import Load, Wire, distance
+
+    length = distance(p1, p2)
+    u = tuple((p2[i] - p1[i]) / length for i in range(3))
+
+    def at(d: float) -> Vec3:
+        return (p1[0] + u[0] * d, p1[1] + u[1] * d, p1[2] + u[2] * d)
+
+    sections: list[tuple[float, float, bool]] = []
+    cursor = 0.0
+    if coil is not None:
+        coil_len = min(ctx.segment_length, length / 3)
+        start = min(max(coil_distance - coil_len / 2, 0.0), length - coil_len)
+        if start > EPS:
+            sections.append((0.0, start, False))
+        sections.append((start, start + coil_len, True))
+        cursor = start + coil_len
+    if length - cursor > EPS:
+        sections.append((cursor, length, False))
+
+    first = len(model.wires)
+    for d0, d1, is_coil in sections:
+        index = model.add_wire(Wire(at(d0), at(d1), radius,
+                                    "Loading coil" if is_coil else name,
+                                    part_id=coil.id if is_coil else part_id,
+                                    segments=1 if is_coil else 0))
+        if is_coil:
+            model.loads.append(Load(index, 0.5, l_uh=coil.params["inductance"],
+                                    q=coil.params["q"], name="Loading coil", part_id=coil.id))
+    return first
 
 
 @dataclass(frozen=True)
