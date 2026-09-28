@@ -10,6 +10,8 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 from PySide6.QtCore import QThreadPool  # noqa: E402
 
+import numpy as np  # noqa: E402
+
 from antennasim.model.document import NODE_ANTENNA  # noqa: E402
 
 
@@ -461,3 +463,47 @@ def test_swr_axis_frames_the_dip_then_falls_back_to_the_data(app, window):
     peak = float(np.max(window.sim.swr_rig))
     assert float(np.min(window.sim.swr_rig)) > 10
     assert window.sweep_plots.swr_plot.viewRange()[1][1] >= peak, peak
+
+
+def test_azimuth_plot_scales_to_the_pattern_variation(app, window):
+    from antennasim.ui.plots import _azimuth_range_db, _ring_levels
+
+    # One radial is lopsided; four is all but perfectly omnidirectional.
+    def run(count):
+        window.ctl.set_value("radials1", "count", count)
+        window.run_simulation()
+        wait_for_run(app, window)
+        return window.sim.summary, window.sweep_plots and window.pattern_plots.azimuth.range_db
+
+    lopsided, lopsided_range = run(1)
+    assert lopsided.azimuth_variation_db > 2.0
+    assert lopsided.max_azimuth_deg == pytest.approx(45.0, abs=10)  # towards the radial
+
+    omni, omni_range = run(4)
+    assert omni.azimuth_variation_db < 0.2
+
+    # The scale follows the data instead of flattening small variation to a circle.
+    assert omni_range < lopsided_range
+    assert _azimuth_range_db(np.array([0.0, -0.1]), []) >= 2.0     # never absurdly tight
+    assert _azimuth_range_db(np.array([0.0, -80.0]), []) <= 30.0   # nor absurdly wide
+    assert _ring_levels(30)[-1] == -30 and len(_ring_levels(2.0)) == 4
+
+
+def test_polar_plot_fits_any_widget_shape(app):
+    from antennasim.ui.plots import PolarPlot
+
+    angles = np.arange(0, 361, 5)
+    gains = np.full_like(angles, 0.5, dtype=float)
+    for half in (False, True):
+        for width, height in ((800, 600), (500, 900), (300, 900), (900, 300)):
+            plot = PolarPlot("t", half=half)
+            plot.resize(width, height)
+            plot.show()
+            app.processEvents()
+            plot.show_cut(angles, gains, 0.5, "x")
+            app.processEvents()
+            (x_lo, x_hi), (y_lo, y_hi) = plot.viewRange()
+            # The unit circle must be inside the view whatever the aspect is.
+            assert x_lo <= -1 and x_hi >= 1, (half, width, height, x_lo, x_hi)
+            assert y_hi >= 1 and y_lo <= (0 if half else -1), (half, width, height, y_lo, y_hi)
+            plot.close()

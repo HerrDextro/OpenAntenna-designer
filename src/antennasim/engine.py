@@ -118,6 +118,7 @@ class Summary:
     takeoff_deg: float
     max_azimuth_deg: float
     elevation_beamwidth_deg: float | None
+    azimuth_variation_db: float
     feedline_loss_db: float
     ground_loss_ohm: float | None
     segments: int
@@ -178,6 +179,7 @@ def simulate(project: Project, backend: SolverBackend) -> Simulation:
         takeoff_deg=ps.max_elevation_deg,
         max_azimuth_deg=ps.max_azimuth_deg,
         elevation_beamwidth_deg=ps.elevation_beamwidth_deg,
+        azimuth_variation_db=ps.azimuth_variation_db,
         feedline_loss_db=float(design_feed.total_loss_db[0]),
         ground_loss_ohm=built.ground_loss_ohm,
         segments=sum(max(w.segments, 1) for w in built.model.wires),

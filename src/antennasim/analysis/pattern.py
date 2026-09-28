@@ -15,6 +15,7 @@ class PatternSummary:
     max_elevation_deg: float  # take-off angle
     max_azimuth_deg: float
     elevation_beamwidth_deg: float | None
+    azimuth_variation_db: float  # how far from omnidirectional at the take-off angle
 
 
 def summarize(p: Pattern) -> PatternSummary:
@@ -30,8 +31,12 @@ def summarize(p: Pattern) -> PatternSummary:
             step = p.theta_deg[1] - p.theta_deg[0]
             elev = 90.0 - float(p.theta_deg[it] + 0.5 * (y0 - y2) / denom * step)
 
+    # A single radial, or two, leaves the pattern lopsided; symmetric sets of
+    # three or more cancel almost all of it. Quote the residual either way.
+    ring = g[it, :]
+    variation = float(np.max(ring) - np.min(ring))
     return PatternSummary(float(g[it, ip]), elev, float(p.phi_deg[ip]),
-                          _beamwidth(p.theta_deg, g[:, ip], it))
+                          _beamwidth(p.theta_deg, g[:, ip], it), variation)
 
 
 def _beamwidth(theta: np.ndarray, cut: np.ndarray, i_max: int) -> float | None:

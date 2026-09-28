@@ -38,10 +38,12 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
 - **At the design frequency:**
   - input impedance, SWR at the feed point and at the radio, feedline loss
   - max gain, take-off angle, elevation beamwidth, radiation efficiency
+  - azimuth variation: how far from omnidirectional, and in which direction
 - **Across the frequency sweep:** resonant frequency and SWR bandwidth.
 - **Plots:**
   - SWR and impedance sweeps, with your zoom kept between runs and a **Reset zoom** button
-  - elevation and azimuth polar patterns
+  - elevation and azimuth polar patterns, the azimuth scale following the pattern's own
+    variation so a fraction of a dB is still visible
   - a 3D view showing current distribution and the pattern surface
 - **Comparisons:** save the current design as a reference, change something, and the plots overlay both while the results show the difference beside each value.
 - **Values that moved** in the latest run are highlighted, with the previous value in the tooltip.

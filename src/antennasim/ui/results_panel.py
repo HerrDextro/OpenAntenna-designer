@@ -225,6 +225,13 @@ class ResultsPanel(QWidget):
         rows.append(("Take-off angle", f"{s.takeoff_deg:.1f}°", "Elevation of maximum gain"))
         if s.elevation_beamwidth_deg:
             rows.append(("Elevation −3 dB width", f"{s.elevation_beamwidth_deg:.0f}°", ""))
+        spread = s.azimuth_variation_db
+        omni_tip = ("Difference between the strongest and weakest direction at the take-off "
+                    "angle. Asymmetric radials (one or two) tilt the pattern; three or more "
+                    "cancel nearly all of it.")
+        rows.append(("Azimuth variation",
+                     "omnidirectional (< 0.1 dB)" if spread < 0.1
+                     else f"{spread:.2f} dB, max at {s.max_azimuth_deg:.0f}°", omni_tip))
         if s.efficiency is not None:
             rows.append(("Efficiency", f"{s.efficiency * 100:.1f} %",
                          "Radiated / input power: conductor, coil and ground-loss "

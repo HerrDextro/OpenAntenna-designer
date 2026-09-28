@@ -23,6 +23,27 @@ def _pen(color, width=2, style=Qt.PenStyle.SolidLine):
     return pg.mkPen(color=color, width=width, style=style)
 
 
+def _ring_levels(range_db: float) -> list[float]:
+    """Ring levels for a polar plot covering `range_db` below the maximum."""
+    if range_db >= 25:
+        return [0, -3, -10, -20, -30]
+    if range_db >= 8:
+        return [0, -3, -6, -10, -20]
+    step = round(range_db / 3, 1)
+    return [0, -step, -2 * step, -3 * step]
+
+
+def _azimuth_range_db(gains, extra, floor: float = 2.0, ceiling: float = 30.0) -> float:
+    """Scale the azimuth plot to the pattern's own variation.
+
+    A vertical with three or four radials varies by a fraction of a dB. On a
+    fixed 30 dB scale that is a perfect circle, which hides the very asymmetry
+    someone is looking for.
+    """
+    spans = [float(np.max(g) - np.min(g)) for g in [gains] + [e[1] for e in extra]]
+    return min(max(max(spans) * 1.6, floor), ceiling)
+
+
 def _swr_axis_top(sim, references, threshold: float) -> float:
     """Top of the SWR axis.
 
@@ -156,6 +177,35 @@ class PolarPlot(pg.PlotWidget):
         self.base_title = title
         self.setTitle(title)
 
+    def _fit_view(self):
+        """Show the whole circle whatever shape the widget is.
+
+        The view is aspect-locked, and pyqtgraph honours that by shrinking the
+        x range in a tall, narrow widget, which clips the pattern. Ask for a
+        rectangle that already matches the widget instead.
+        """
+        x_lo, x_hi = -1.25, 1.25
+        y_lo, y_hi = (-0.1 if self.half else -1.25), 1.25
+
+        width = max(self.width(), 1)
+        height = max(self.height(), 1)
+        data_w, data_h = x_hi - x_lo, y_hi - y_lo
+        if width / height > data_w / data_h:
+            pad = (data_h * width / height - data_w) / 2
+            x_lo, x_hi = x_lo - pad, x_hi + pad
+        else:
+            pad = (data_w * height / width - data_h) / 2
+            y_lo, y_hi = y_lo - pad, y_hi + pad
+        self.setXRange(x_lo, x_hi, padding=0)
+        self.setYRange(y_lo, y_hi, padding=0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # pyqtgraph resizes during its own constructor (before `half` exists) and
+        # again while closing (after it drops the plot item).
+        if hasattr(self, "half") and getattr(self, "plotItem", None) is not None:
+            self._fit_view()
+
     def _xy(self, angles_deg, gains, g_ref):
         r = np.clip((np.asarray(gains) - g_ref) / self.range_db + 1.0, 0.0, None)
         a = np.radians(angles_deg)
@@ -166,17 +216,16 @@ class PolarPlot(pg.PlotWidget):
         a_max = 180 if self.half else 360
         ring_angles = np.linspace(0, a_max, 181)
         label_angle = math.radians(75)
-        for level in (0, -3, -10, -20, -30):
-            if -level > self.range_db:
-                continue
+        for level in _ring_levels(self.range_db):
             r = 1 + level / self.range_db
             x, y = r * np.cos(np.radians(ring_angles)), r * np.sin(np.radians(ring_angles))
             style = Qt.PenStyle.DashLine if level == -3 else Qt.PenStyle.SolidLine
             self.plot(x, y, pen=_pen("#d0d0d0", 1, style))
             if level == -3:
                 continue
-            t = pg.TextItem(f"{level} dB" if level else f"{g_ref:.1f} dBi", color="#808080",
-                            anchor=(0.0, 1.0))
+            text = f"{g_ref:.1f} dBi" if not level else (
+                f"{level:.1f} dB" if abs(level) < 10 else f"{level:.0f} dB")
+            t = pg.TextItem(text, color="#808080", anchor=(0.0, 1.0))
             t.setPos(r * math.cos(label_angle), r * math.sin(label_angle))
             self.addItem(t)
         for ang in range(0, a_max + (1 if self.half else 0), 30):
@@ -192,8 +241,7 @@ class PolarPlot(pg.PlotWidget):
             self.plot(rx, ry, pen=_pen(color, 1.5, Qt.PenStyle.DashLine), name=name)
         x, y = self._xy(angles_deg, gains, g_ref)
         self.plot(x, y, pen=_pen(BLUE, 2.5))
-        self.setXRange(-1.25, 1.25, padding=0)
-        self.setYRange(-0.1 if self.half else -1.25, 1.25, padding=0)
+        self._fit_view()
         self.setTitle(f"{self.base_title}<br><span style='font-size:9pt;color:#606060'>{label}</span>")
 
 
@@ -234,5 +282,9 @@ class PatternPlots(QWidget):
                                 f"Azimuth {s.max_azimuth_deg:.0f}°, take-off {s.takeoff_deg:.1f}°",
                                 extra_el)
         az, g_az = pattern_analysis.azimuth_cut(p, max(s.takeoff_deg, 0.0))
-        self.azimuth.show_cut(az, g_az, s.max_gain_dbi, f"Elevation {s.takeoff_deg:.0f}°",
-                              extra_az)
+        self.azimuth.range_db = _azimuth_range_db(g_az, extra_az)
+        spread = s.azimuth_variation_db
+        shape = ("omnidirectional" if spread < 0.1 else
+                 f"{spread:.1f} dB variation, max at {s.max_azimuth_deg:.0f}°")
+        self.azimuth.show_cut(az, g_az, s.max_gain_dbi,
+                              f"Elevation {s.takeoff_deg:.0f}°, {shape}", extra_az)
