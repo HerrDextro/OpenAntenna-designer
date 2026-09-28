@@ -14,7 +14,7 @@ from .analysis.ground_loss import estimate_ground_loss
 from .analysis.swr import bandwidth, resonances, swr
 from .analysis.tuner import TuneResult, find_resonance
 from .geometry.segmentation import segment, target_segment_length
-from .geometry.validation import ERROR, INFO, Issue, validate_model
+from .geometry.validation import ERROR, INFO, Issue, ground_dependence, validate_model
 from .geometry.wire_model import GroundModel, Load, WireModel
 from .model.document import NODE_ENVIRONMENT, NODE_SIMULATION, Project
 from .model.materials import CONDUCTORS, GROUNDS
@@ -94,6 +94,10 @@ def build(project: Project) -> BuiltModel:
                                   f"pattern uses the real soil.", NODE_ENVIRONMENT))
 
     issues += validate_model(model, f_min, f_max)
+    reliance = ground_dependence(model, sim["design_mhz"],
+                                 GROUNDS[env["soil"]].label if env["ground"] == "real" else "")
+    if reliance is not None:
+        issues.append(reliance)
     return BuiltModel(model, solve_ground, ground_loss, issues)
 
 

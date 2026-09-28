@@ -102,3 +102,31 @@ def validate_model(model: WireModel, freq_min_mhz: float, freq_max_mhz: float) -
                     once(WARNING, f"{w.name}: closer than {clearance * 1000:.0f} mm to ground; "
                                   "NEC2 results are unreliable this close.", w.part_id)
     return issues
+
+
+def ground_dependence(model: WireModel, design_mhz: float, soil_label: str) -> Issue | None:
+    """Say plainly when results are not free-space numbers.
+
+    Over ground, the reflection sets gain and take-off angle, and close to it the
+    soil also pulls the feed impedance around, so the user should always know
+    which numbers lean on the soil setting.
+    """
+    if model.ground.kind == "free_space" or model.source is None:
+        return None
+    wire = model.wires[model.source.wire]
+    feed_z = wire.p1[2] + (wire.p2[2] - wire.p1[2]) * model.source.fraction
+    height_wl = feed_z / wavelength_m(design_mhz)
+
+    if model.ground.kind == "perfect":
+        return Issue(INFO, f"Not free space: perfect ground. The feed point is {height_wl:.2f} λ "
+                           f"up. Gain is roughly 3 dB optimistic compared with real soil, and "
+                           f"there are no ground losses.", "environment")
+    where = ("sits on real ground" if height_wl < 0.01
+             else f"is {height_wl:.2f} λ above real ground")
+    if height_wl < 0.2:
+        return Issue(WARNING, f"Not free space: the feed point {where} ({soil_label}). "
+                              f"Impedance, gain and take-off angle all depend on the soil: "
+                              f"try another soil to see the spread.", "environment")
+    return Issue(INFO, f"Not free space: the feed point {where} ({soil_label}). The soil sets "
+                       f"the pattern shape and take-off angle; the impedance is affected less "
+                       f"at this height.", "environment")

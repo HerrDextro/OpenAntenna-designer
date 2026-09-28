@@ -102,7 +102,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.busy_bar)
         self.statusBar().showMessage(f"Solver: {self.backend.name}"
                                      if self.backend.executable else
-                                     "nec2c not found — build it with third_party/build_nec2c.py")
+                                     "nec2c not found: build it with third_party/build_nec2c.py")
         self.resize(1500, 900)
         self._apply_document_state()
         self._refresh_views()
@@ -346,13 +346,18 @@ class MainWindow(QMainWindow):
     def _sync_units_actions(self, units):
         (self.act_imperial if units == IMPERIAL else self.act_metric).setChecked(True)
 
+    def _sync_name_with_path(self):
+        """Name the design after its file, so copied text and headers match."""
+        if self.path is not None:
+            self.ctl.project.name = self.path.stem
+
     def _update_title(self):
         if not self.has_document:
             self.setWindowTitle("AntennaSim")
             return
         name = self.path.name if self.path else "Untitled"
         dirty = "" if self.ctl.undo_stack.isClean() else " •"
-        self.setWindowTitle(f"{name}{dirty} — AntennaSim")
+        self.setWindowTitle(f"{name}{dirty} - AntennaSim")
 
     def _fit_views(self):
         self.side_view.fit()
@@ -369,7 +374,7 @@ class MainWindow(QMainWindow):
         if self.ctl.built.has_errors:
             self.results.set_simulation(self.sim, stale=True)
             self.results.set_status("Fix the errors under Model checks to simulate.", error=True)
-            self.statusBar().showMessage("Model has errors — see Model checks.", 8000)
+            self.statusBar().showMessage("Model has errors: see Model checks.", 8000)
             return
         self._running = True
         self._latest = next(self._generation)
@@ -492,6 +497,7 @@ class MainWindow(QMainWindow):
         self.sim = None
         self.references.clear()
         self.has_document = True
+        self._sync_name_with_path()
         self._apply_document_state()
         self.ctl.set_project(project)
         self.freq_spin.blockSignals(True)
@@ -527,6 +533,7 @@ class MainWindow(QMainWindow):
     def save_project(self) -> bool:
         if self.path is None:
             return self.save_project_as()
+        self._sync_name_with_path()
         try:
             save_project(self.ctl.project, self.path)
         except OSError as e:
@@ -535,6 +542,7 @@ class MainWindow(QMainWindow):
         self.ctl.undo_stack.setClean()
         self._update_title()
         self.statusBar().showMessage(f"Saved {self.path}", 4000)
+        self.properties.show_node(self.ctl.selected)  # header may carry the new name
         return True
 
     def save_project_as(self) -> bool:

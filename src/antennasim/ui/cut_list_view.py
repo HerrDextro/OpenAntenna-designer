@@ -62,7 +62,7 @@ class CutListView(QWidget):
 
     def refresh(self):
         project = self.ctl.project
-        self.title.setText(f"Cut list — {project.template.name}")
+        self.title.setText(f"Cut list: {project.template.name}")
         rows = self.rows()
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):

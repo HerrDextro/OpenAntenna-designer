@@ -13,16 +13,17 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
 ## Features
 
 ### Design
-- **Antenna types you choose.** V1 covers the monopole / vertical family:
-  - ground-mounted and elevated verticals
-  - inverted L / L hang
+- **Antenna types you choose.** Two families so far:
+  - **Monopole / vertical:** ground-mounted or elevated verticals, and inverted L / L hang.
+  - **Dipole:** flat dipole, inverted V, and slopers by direction.
 - **Parts:**
   - radials, modeled as wires or buried in the ground
   - capacitive top hats, with optional perimeter ring
-  - loading coils, with inductance and Q
+  - loading coils with inductance and Q (a dipole gets a matched pair, one per leg)
 - **2D diagram editor.**
   - Side and top views with draggable handles and live dimension lines.
   - A part tree on the left and a properties panel on the right.
+  - Right-click the diagram or the tree to add and remove parts.
   - Deselect everything (click empty space in the tree, or press Escape) for an **overview** of every setting at once.
 - **Environment:**
   - free space, perfect ground, or real soil (presets from city ground to salt water)
@@ -39,22 +40,33 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
   - max gain, take-off angle, elevation beamwidth, radiation efficiency
 - **Across the frequency sweep:** resonant frequency and SWR bandwidth.
 - **Plots:**
-  - SWR and impedance sweeps
+  - SWR and impedance sweeps, with your zoom kept between runs and a **Reset zoom** button
   - elevation and azimuth polar patterns
   - a 3D view showing current distribution and the pattern surface
 - **Comparisons:** save the current design as a reference, change something, and the plots overlay both while the results show the difference beside each value.
+- **Values that moved** in the latest run are highlighted, with the previous value in the tooltip.
 - **Copy to clipboard:** settings, results and the cut list all copy as plain text for your notes.
 
 ### Tools
-- **Tune to resonance:** automatically adjusts element length, coil inductance, top hat or radial length.
+- **Tune to resonance:** adjusts element length, coil inductance, top hat or radial length until reactance is zero. It always finds the *fundamental* resonance rather than an antiresonance or a higher-order one, whatever value you start from, and explains itself when a parameter cannot reach resonance.
 - **Coil calculator:** turns, coil length and wire needed for a target inductance.
 - **Cut list:** its own tab with everything you need to cut before you build.
-- **Model checks:** warnings when a design breaks NEC2's modeling rules, so you don't trust bad numbers.
+- **Model checks:**
+  - warnings when a design breaks NEC2's modeling rules, so you don't trust bad numbers
+  - a standing notice of **how much the results lean on the ground**, since only free space is soil-independent
 - **NEC export:** writes a `.nec` deck to cross-check your design in 4nec2 or other NEC tools.
 
 | SWR & impedance | Radiation pattern |
 |---|---|
 | ![SWR and impedance sweep](docs/images/swr.png) | ![Elevation and azimuth patterns](docs/images/pattern.png) |
+
+| Inverted V dipole | Comparison against a saved reference |
+|---|---|
+| ![Inverted V](docs/images/diagram-dipole.png) | ![Pattern comparison](docs/images/compare-pattern.png) |
+
+| Overview of every setting | Cut list |
+|---|---|
+| ![Overview](docs/images/overview.png) | ![Cut list](docs/images/cut-list.png) |
 
 | 80 m inverted L with buried radials | 3D view |
 |---|---|
@@ -95,11 +107,16 @@ Linux / macOS:
 You can also open a saved design directly: `python -m antennasim mydesign.antsim`.
 
 ### Quick tour
-1. The app starts with a 20 m elevated ground plane. **Drag the orange handles** in the diagram to change lengths and heights.
-2. Keep **Auto-run** on and results update as you edit, or press **F5**.
-3. Use **Add Capacitive top hat / Add Loading coil** or right-click the part tree to add parts.
-4. Open **Tune…** to make the antenna resonant at your design frequency, then **Apply**.
-5. Check the **Cut list** tab and go build it.
+1. The app opens on a start screen. Pick **Monopole / vertical** or **Dipole**, or open a saved design.
+
+   ![Start screen](docs/images/start-screen.png)
+
+2. **Drag the orange handles** in the diagram to change lengths, heights and angles.
+3. Keep **Auto-run** on and results update as you edit, or press **F5**.
+4. Add parts from the toolbar, or right-click the diagram or part tree.
+5. Open **Tune…** to make the antenna resonant at your design frequency, then **Apply**.
+6. Press **Save reference** (Ctrl+R), change something, and compare the two side by side.
+7. Check the **Cut list** tab and go build it.
 
 ---
 
@@ -117,19 +134,21 @@ Project (.antsim) → Template → 3D wire model → Model checks
   - The solver sits behind an interface and can be swapped out.
 - **Far-field patterns** (`src/antennasim/analysis/farfield.py`) are computed from the NEC segment currents using the reflection-coefficient ground model. The test suite checks them against NEC's own output; they agree within 0.02 dB.
 - **Ground-mounted verticals over real soil:** NEC2 cannot connect a wire to lossy ground. For these, the current solution uses perfect ground plus a ground-loss resistance at the feed point, while the pattern still uses the real soil. Elevated antennas use NEC2's full Sommerfeld real-ground solution.
+- **Tuning** (`src/antennasim/analysis/tuner.py`) scans upward and takes the first negative-to-positive crossing of reactance. Element length runs through a fundamental resonance, then an antiresonance (a pole, not a zero), then higher-order resonances, so simply bracketing a sign change lands on the wrong one.
 
 ### Project layout
 
 ```
 src/antennasim/
   model/       project document, parameter specs, units, materials & coax data
-  templates/   antenna types (monopole.py) and the template interface
+  templates/   antenna types (monopole.py, dipole.py) and the template interface
   geometry/    wire model, automatic segmentation, model validity checks
   solver/      NEC deck writer, nec2c backend, result types
   analysis/    far field, SWR/bandwidth, feedline, ground loss, coil design, tuner
   fileio/      .antsim save/load, .nec export
-  ui/          PySide6 main window, diagram editor, plots, 3D view, dialogs
-tests/         solver reference cases, analysis, templates, UI smoke tests
+  ui/          PySide6 main window, start screen, diagram editor, plots, 3D view,
+               cut list, comparisons, dialogs
+tests/         solver reference cases, analysis, both templates, UI smoke tests
 third_party/   nec2c source + build script
 ```
 
@@ -139,14 +158,15 @@ third_party/   nec2c source + build script
 python -m pytest
 ```
 
-The tests include NEC2 reference cases: a quarter-wave monopole gives about 36 Ω and a half-wave dipole about 73 Ω.
+The suite runs the real solver and the real UI (offscreen). It covers NEC2 reference cases (a quarter-wave monopole gives about 36 Ω, a half-wave dipole about 73 Ω), far-field agreement with NEC's own pattern output, the analysis maths, both templates, and UI behaviour including tuning, comparisons and recovery from solver failures.
 
 ---
 
 ## Roadmap
 
 - [x] **V1:** monopole / vertical, inverted L, radials, top hat, loading coil
-- [ ] Dipole, inverted V, fan dipole, traps
+- [x] Dipole and inverted V, with symmetric loading coils
+- [ ] Fan dipole and traps
 - [ ] End-fed / random wire with unun
 - [ ] Loops: resonant loop (quad / delta) and magnetic loop (with capacitor voltage and efficiency)
 - [ ] Bowtie, discone, halo
@@ -154,7 +174,8 @@ The tests include NEC2 reference cases: a quarter-wave monopole gives about 36 �
 
 ## Accuracy notes
 
-Treat simulated results as a strong starting point, not a guarantee. Nearby objects, masts, feedline common-mode currents and real soil all shift a real antenna.
+Treat simulated results as a strong starting point, not a guarantee. Nearby objects, masts, walls, feedline common-mode currents and real soil all shift a real antenna.
+- Only free space is soil-independent. Over ground, the soil sets the pattern and take-off angle, and below about 0.2 λ it pulls the feed impedance around as well. Model checks tells you which case you are in.
 - The ground-loss resistance for buried radials is a rule-of-thumb estimate. You can enter a measured value manually instead.
 - Coax loss figures are typical datasheet values.
 - Loading coils are modeled as lumped RLC loads. Coil self-resonance and physical coil length are not modeled.

@@ -42,7 +42,7 @@ def node_sections(project: Project) -> list[tuple[str, list[tuple[str, str]]]]:
 
 
 def settings_text(project: Project) -> str:
-    lines = [f"{project.name} — {project.template.name}"]
+    lines = [f"{project.name} ({project.template.name})"]
     for title, rows in node_sections(project):
         lines.append("")
         lines.append(f"[{title}]")
@@ -51,13 +51,13 @@ def settings_text(project: Project) -> str:
 
 
 def results_text(project: Project, rows: list[tuple[str, str, str]]) -> str:
-    lines = [f"{project.name} — {project.template.name} results", ""]
+    lines = [f"{project.name} ({project.template.name}) results", ""]
     lines += [f"{label}: {value}" for label, value, _ in rows]
     return "\n".join(lines) + "\n"
 
 
 def cut_list_text(project: Project, rows: list[tuple[str, str, str, str]]) -> str:
-    lines = [f"{project.name} — cut list", ""]
+    lines = [f"{project.name} cut list", ""]
     for name, qty, length, note in rows:
         line = f"{qty} × {name}"
         if length:

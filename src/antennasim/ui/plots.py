@@ -7,7 +7,8 @@ import math
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+                               QWidget)
 
 from ..analysis import pattern as pattern_analysis
 from ..engine import Simulation
@@ -15,10 +16,27 @@ from ..engine import Simulation
 pg.setConfigOptions(antialias=True, background="w", foreground="#303030")
 
 BLUE, ORANGE, GREEN, GREY = "#1f77b4", "#ff7f0e", "#2ca02c", "#8c8c8c"
+SWR_CEILING = 50.0  # SWR above this is "hopeless" either way; keeps the axis readable
 
 
 def _pen(color, width=2, style=Qt.PenStyle.SolidLine):
     return pg.mkPen(color=color, width=width, style=style)
+
+
+def _swr_axis_top(sim, references, threshold: float) -> float:
+    """Top of the SWR axis.
+
+    Zooming in on the dip matters more than showing how bad a mismatch gets, so
+    a badly matched sweep runs off the top of the axis instead of flattening the
+    whole curve against it. If even the best SWR is high, fall back to fitting
+    the data so the curve stays on screen.
+    """
+    curves = [sim.swr_rig, sim.swr_feedpoint] + [r.simulation.swr_rig for r in references]
+    best = min(float(np.min(c)) for c in curves)
+    peak = min(max(float(np.max(c)) for c in curves), SWR_CEILING)
+    if best > 10:
+        return peak * 1.05
+    return max(threshold * 1.5, min(peak * 1.05, max(best * 3.0, 4.0)))
 
 
 class SweepPlots(QWidget):
@@ -36,11 +54,48 @@ class SweepPlots(QWidget):
         self.z_plot.showGrid(x=True, y=True, alpha=0.25)
         self.z_plot.addLegend(offset=(-10, 10))
         self.z_plot.setXLink(self.swr_plot)
+
+        header = QHBoxLayout()
+        header.addStretch(1)
+        self.reset_button = QPushButton("Reset zoom")
+        self.reset_button.setToolTip("Fit the whole sweep again (or double-click a plot)")
+        self.reset_button.clicked.connect(self.reset_zoom)
+        header.addWidget(self.reset_button)
+        layout.addLayout(header)
         layout.addWidget(self.swr_plot, 1)
         layout.addWidget(self.z_plot, 1)
         self.message = QLabel("Run the simulation to see SWR and impedance.")
         self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.message)
+
+        # A zoom the user set by hand survives re-runs, so you can watch one
+        # region while tweaking; a new sweep range or Reset zoom refits.
+        self.user_zoomed = False
+        self._fit: tuple[float, float, float] | None = None  # f_lo, f_hi, swr_max
+        self._sweep: tuple[float, float] | None = None
+        for plot in (self.swr_plot, self.z_plot):
+            plot.getViewBox().sigRangeChangedManually.connect(self._note_manual_zoom)
+            plot.scene().sigMouseClicked.connect(self._on_click)
+
+    def _note_manual_zoom(self, *_):
+        self.user_zoomed = True
+
+    def _on_click(self, event):
+        if event.double():
+            self.reset_zoom()
+
+    def reset_zoom(self):
+        self.user_zoomed = False
+        self._apply_fit()
+
+    def _apply_fit(self):
+        if self._fit is None:
+            return
+        f_lo, f_hi, swr_max = self._fit
+        self.swr_plot.setXRange(f_lo, f_hi, padding=0.02)
+        self.swr_plot.setYRange(1, swr_max)
+        self.z_plot.setXRange(f_lo, f_hi, padding=0.02)
+        self.z_plot.enableAutoRange(axis="y")
 
     def show_simulation(self, sim: Simulation | None, threshold: float = 2.0,
                         references: list = ()):
@@ -52,28 +107,30 @@ class SweepPlots(QWidget):
         self.message.hide()
         for ref in references:
             pen = _pen(ref.color, 1.5, Qt.PenStyle.DashLine)
-            self.swr_plot.plot(ref.simulation.freqs,
-                               np.minimum(ref.simulation.swr_rig, 10.0), pen=pen,
-                               name=f"{ref.name} (SWR)")
+            self.swr_plot.plot(ref.simulation.freqs, np.minimum(ref.simulation.swr_rig, SWR_CEILING),
+                               pen=pen, name=f"{ref.name} (SWR)")
             self.z_plot.plot(ref.simulation.freqs, ref.simulation.z_antenna.real, pen=pen,
                              name=f"{ref.name} (R)")
             self.z_plot.plot(ref.simulation.freqs, ref.simulation.z_antenna.imag,
                              pen=_pen(ref.color, 1.5, Qt.PenStyle.DotLine),
                              name=f"{ref.name} (X)")
         f = sim.freqs
-        clip = lambda s: np.minimum(s, 10.0)  # noqa: E731
+        clip = lambda s: np.minimum(s, SWR_CEILING)  # noqa: E731
         self.swr_plot.plot(f, clip(sim.swr_feedpoint), pen=_pen(BLUE), name="At feed point")
         if not np.allclose(sim.swr_rig, sim.swr_feedpoint):
             self.swr_plot.plot(f, clip(sim.swr_rig), pen=_pen(ORANGE), name="At radio")
         self.swr_plot.addItem(pg.InfiniteLine(threshold, angle=0, pen=_pen(GREY, 1, Qt.PenStyle.DashLine)))
         self.swr_plot.addItem(pg.InfiniteLine(sim.summary.design_mhz, angle=90,
                                               pen=_pen("#d62728", 1, Qt.PenStyle.DashLine)))
-        self.swr_plot.setYRange(1, min(max(float(np.max(clip(sim.swr_rig))), threshold) * 1.05, 10.5))
-        # Refit the frequency axis: otherwise a zoomed-in view survives the run and
-        # shows a sliver of the curve. References may span a different sweep.
         f_lo = min([float(f[0])] + [float(r.simulation.freqs[0]) for r in references])
         f_hi = max([float(f[-1])] + [float(r.simulation.freqs[-1]) for r in references])
-        self.swr_plot.setXRange(f_lo, f_hi, padding=0.02)
+        self._fit = (f_lo, f_hi, _swr_axis_top(sim, references, threshold))
+        # A new sweep range makes an old zoom meaningless, so refit then.
+        if self._sweep != (float(f[0]), float(f[-1])):
+            self._sweep = (float(f[0]), float(f[-1]))
+            self.user_zoomed = False
+        if not self.user_zoomed:
+            self._apply_fit()
 
         z = sim.z_antenna
         self.z_plot.plot(f, z.real, pen=_pen(BLUE), name="R")
@@ -82,8 +139,6 @@ class SweepPlots(QWidget):
         self.z_plot.addItem(pg.InfiniteLine(0, angle=0, pen=_pen(GREY, 1)))
         self.z_plot.addItem(pg.InfiniteLine(sim.summary.design_mhz, angle=90,
                                             pen=_pen("#d62728", 1, Qt.PenStyle.DashLine)))
-        self.z_plot.setXRange(f_lo, f_hi, padding=0.02)
-        self.z_plot.enableAutoRange(axis="y")
 
 
 class PolarPlot(pg.PlotWidget):

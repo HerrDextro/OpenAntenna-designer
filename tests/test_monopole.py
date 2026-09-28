@@ -177,3 +177,47 @@ def test_nec_export_runs(tmp_path, backend):
     from .conftest import parse_rp_total_gain, run_nec_raw
 
     assert parse_rp_total_gain(run_nec_raw(text))
+
+
+def test_ground_dependence_is_always_reported():
+    from antennasim.geometry.validation import INFO
+
+    def notice(project):
+        found = [i for i in build(project).issues if i.message.startswith("Not free space")]
+        return found[0] if found else None
+
+    # Free space says nothing; there is nothing to lean on.
+    free = Project.new("monopole")
+    free.environment["ground"] = "free_space"
+    assert notice(free) is None
+
+    # Low over real ground: a warning, because impedance depends on soil too.
+    low = Project.new("monopole")
+    low.antenna["feed_height"] = 3.0  # 0.14 lambda at 14.2 MHz
+    warn = notice(low)
+    assert warn is not None and warn.level == WARNING
+    assert "0.14" in warn.message and "Average" in warn.message
+
+    # Ground-mounted reads naturally rather than "0.00 lambda".
+    grounded = grounded_vertical("real")
+    grounded.add_part("radials", {"mode": "buried"})
+    assert "sits on real ground" in notice(grounded).message
+
+    # Well up: still flagged, but only the pattern leans on the soil.
+    high = Project.new("monopole")
+    high.antenna["feed_height"] = 12.0
+    note = notice(high)
+    assert note.level == INFO and "0.57" in note.message
+
+    # Perfect ground is not free space either.
+    perfect = Project.new("monopole")
+    perfect.environment["ground"] = "perfect"
+    assert "perfect ground" in notice(perfect).message
+
+
+def test_wider_droop_range_allows_upward_slopes():
+    p = Project.new("monopole")
+    p.set_value("radials1", "droop", -75.0)
+    assert p.part("radials1").params["droop"] == pytest.approx(-75.0)
+    tips = [w.p2[2] for w in build(p).model.wires if w.name.startswith("Radial")]
+    assert all(t > p.antenna["feed_height"] for t in tips)  # radials slope upward

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import Qt, QSignalBlocker
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QLabel,
@@ -16,6 +18,22 @@ _DECIMALS = {"length": 3, "small_length": 2, "angle": 1, "frequency": 4, "induct
              "resistance": 2, "float": 3}
 _STEPS = {"length": 0.05, "small_length": 0.5, "angle": 5.0, "frequency": 0.05,
           "inductance": 0.5, "resistance": 1.0, "float": 0.1}
+
+
+class SnappingDoubleSpinBox(QDoubleSpinBox):
+    """Stepping lands on round multiples of the step instead of drifting.
+
+    Dragging a handle leaves values like 27.3°; without this, stepping down
+    gives 22.3, 17.3 … which looks arbitrary.
+    """
+
+    def stepBy(self, steps: int):
+        step = self.singleStep()
+        if step > 0:
+            target = math.floor(self.value() / step + 1e-9) if steps > 0 else                 math.ceil(self.value() / step - 1e-9)
+            self.setValue((target + steps) * step)
+        else:
+            super().stepBy(steps)
 
 
 class PropertiesPanel(QWidget):
@@ -84,7 +102,8 @@ class PropertiesPanel(QWidget):
             label = QLabel(spec.label)
             if spec.help:
                 label.setToolTip(spec.help)
-                editor.setToolTip(spec.help)
+                if not editor.toolTip():
+                    editor.setToolTip(spec.help)
             self.form.addRow(label, editor)
             self.editors[spec.key] = (spec, editor, label)
             self._load(spec.key, values[spec.key])
@@ -97,7 +116,7 @@ class PropertiesPanel(QWidget):
             self.form.removeRow(0)
         self.editors.clear()
         project = self.ctl.project
-        self.title.setText("Overview — all settings")
+        self.title.setText("Overview: all settings")
         first = True
         for section, rows in node_sections(project):
             header = QLabel(section)
@@ -137,7 +156,7 @@ class PropertiesPanel(QWidget):
             w.setKeyboardTracking(False)
             w.valueChanged.connect(lambda v, k=spec.key: self._commit(k, v, merge=True))
         else:
-            w = QDoubleSpinBox()
+            w = SnappingDoubleSpinBox()
             decimals = _DECIMALS.get(spec.kind, 3)
             lo = spec.minimum if spec.minimum is not None else -1e6
             hi = spec.maximum if spec.maximum is not None else 1e6
@@ -148,6 +167,10 @@ class PropertiesPanel(QWidget):
             if suffix:
                 w.setSuffix(f" {suffix}")
             w.setKeyboardTracking(False)
+            # Qt refuses keystrokes that would leave the range, so say what it is.
+            unit = f" {suffix}" if suffix else ""
+            limits = f"Range {w.minimum():g} to {w.maximum():g}{unit}"
+            w.setToolTip(f"{spec.help}\n{limits}" if spec.help else limits)
             w.valueChanged.connect(
                 lambda v, k=spec.key, kind=spec.kind: self._commit(k, from_display(kind, v, self.ctl.project.units), merge=True))
         return w

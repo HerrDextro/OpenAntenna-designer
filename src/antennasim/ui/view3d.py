@@ -92,7 +92,7 @@ class View3D(QWidget):
         self._draw_wires(p, center, scale)
 
         p.setPen(QColor("#505050"))
-        p.drawText(10, 20, "3D view — drag to rotate, wheel to zoom")
+        p.drawText(10, 20, "3D view: drag to rotate, wheel to zoom")
         if self.sim is not None:
             p.drawText(10, 38, "Wire colour: current magnitude (blue low, red high)")
         self._draw_axes(p)

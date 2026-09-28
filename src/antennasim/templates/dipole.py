@@ -29,8 +29,9 @@ class DipoleTemplate(AntennaTemplate):
         ParamSpec("diameter", "Wire diameter", "small_length", 2e-3, minimum=1e-5),
         ParamSpec("height", "Feed height above ground", "length", 10.0, minimum=0.0,
                   help="Height of the feed point, i.e. the apex of an inverted V."),
-        ParamSpec("droop", "Leg droop", "angle", 0.0, minimum=-45.0, maximum=80.0,
-                  help="0° is a flat dipole; positive slopes both legs down (inverted V)."),
+        ParamSpec("droop", "Leg droop", "angle", 0.0, minimum=-85.0, maximum=85.0,
+                  help="0° is a flat dipole; positive slopes both legs down (inverted V), "
+                       "negative slopes them up."),
         ParamSpec("azimuth", "Direction", "angle", 0.0, minimum=0.0, maximum=360.0,
                   help="Compass direction the wire runs. Radiation is broadside to this."),
     )

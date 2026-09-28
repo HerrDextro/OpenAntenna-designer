@@ -177,7 +177,7 @@ class ResultsPanel(QWidget):
         if self.busy:
             note, color = "Simulating…", "#1565c0"
         elif self.stale:
-            note, color = "Design changed — results are outdated. Press Run (F5).", "#b26a00"
+            note, color = "Design changed: results are outdated. Press Run (F5).", "#b26a00"
         elif self.changed:
             note, color = f"{len(self.changed)} value(s) changed in this run.", CHANGED_COLOR
         offset = 0

@@ -373,16 +373,91 @@ def test_comparison_overlays_and_deltas(app, window):
     assert not window.references.references
 
 
-def test_rerun_refits_the_zoomed_sweep_plot(app, window):
+def test_manual_zoom_survives_a_rerun_and_reset_refits(app, window):
     wait_for_run(app, window)
-    plot = window.sweep_plots.swr_plot
+    plots = window.sweep_plots
+    plot = plots.swr_plot
     f_lo, f_hi = float(window.sim.freqs[0]), float(window.sim.freqs[-1])
 
-    plot.setXRange(f_lo + 0.4, f_lo + 0.5, padding=0)  # zoom right in
-    zoomed = plot.viewRange()[0]
-    assert zoomed[1] - zoomed[0] < 0.3
+    # An automatic fit after a run leaves the whole sweep visible.
+    shown = plot.viewRange()[0]
+    assert shown[0] <= f_lo + 1e-6 and shown[1] >= f_hi - 1e-6
 
+    # A zoom the user made by hand is kept, so you can watch one region.
+    plot.setXRange(f_lo + 0.4, f_lo + 0.5, padding=0)
+    plots.user_zoomed = True
+    window.ctl.set_value(NODE_ANTENNA, "height", 5.15)
     window.run_simulation()
     wait_for_run(app, window)
-    shown = plot.viewRange()[0]
-    assert shown[0] <= f_lo + 1e-6 and shown[1] >= f_hi - 1e-6, shown
+    kept = plot.viewRange()[0]
+    assert kept[1] - kept[0] < 0.3, kept
+
+    # Reset zoom (also bound to a double-click) fits the sweep again.
+    plots.reset_zoom()
+    assert not plots.user_zoomed
+    refit = plot.viewRange()[0]
+    assert refit[0] <= f_lo + 1e-6 and refit[1] >= f_hi - 1e-6
+
+
+def test_new_sweep_range_discards_an_old_zoom(app, window):
+    wait_for_run(app, window)
+    plots = window.sweep_plots
+    plots.swr_plot.setXRange(14.0, 14.1, padding=0)
+    plots.user_zoomed = True
+
+    window.ctl.set_value("simulation", "sweep_start", 20.0)
+    window.ctl.set_value("simulation", "sweep_stop", 22.0)
+    window.run_simulation()
+    wait_for_run(app, window)
+    assert not plots.user_zoomed
+    shown = plots.swr_plot.viewRange()[0]
+    assert shown[0] <= 20.0 + 1e-6 and shown[1] >= 22.0 - 1e-6, shown
+
+
+def test_saved_design_takes_its_file_name(app, window, tmp_path):
+    from antennasim.ui.formatting import settings_text
+
+    assert window.ctl.project.name == "Untitled antenna"
+    window.path = tmp_path / "CB vertical.antsim"
+    assert window.save_project()
+    assert window.ctl.project.name == "CB vertical"
+    assert settings_text(window.ctl.project).startswith("CB vertical")
+    assert window.windowTitle().startswith("CB vertical.antsim")
+    assert "—" not in window.windowTitle()
+    assert window.windowTitle().endswith("- AntennaSim")
+
+    # Re-opening keeps the name.
+    from antennasim.fileio.project_file import load_project
+
+    assert load_project(tmp_path / "CB vertical.antsim").name == "CB vertical"
+
+
+def test_swr_axis_frames_the_dip_then_falls_back_to_the_data(app, window):
+    import numpy as np
+
+    # Wide sweep around a resonant vertical: a deep dip with high edges. The axis
+    # should frame the dip, letting the edges run off the top, rather than
+    # squashing the whole curve flat to fit the worst value.
+    window.ctl.set_value("simulation", "sweep_start", 10.0)
+    window.ctl.set_value("simulation", "sweep_stop", 20.0)
+    window.run_simulation()
+    wait_for_run(app, window)
+    best = float(np.min(window.sim.swr_rig))
+    peak = float(np.max(window.sim.swr_rig))
+    assert best < 2 < 10 < peak  # a real dip with badly matched edges
+
+    y_lo, y_hi = window.sweep_plots.swr_plot.viewRange()[1]
+    assert y_lo <= 1.5
+    assert y_hi >= best * 1.2, (y_hi, best)  # the dip and its shape are visible
+    assert y_hi < peak, (y_hi, peak)         # not scaled down to fit the worst value
+
+    # When even the best SWR is high there is no dip to frame, so fit the data
+    # and keep the curve on screen.
+    window.ctl.set_value(NODE_ANTENNA, "height", 1.2)
+    window.ctl.set_value("simulation", "sweep_start", 13.5)
+    window.ctl.set_value("simulation", "sweep_stop", 15.0)
+    window.run_simulation()
+    wait_for_run(app, window)
+    peak = float(np.max(window.sim.swr_rig))
+    assert float(np.min(window.sim.swr_rig)) > 10
+    assert window.sweep_plots.swr_plot.viewRange()[1][1] >= peak, peak

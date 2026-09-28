@@ -27,8 +27,9 @@ RADIALS = PartType(
                        "are represented by an estimated ground-loss resistance."),
         ParamSpec("count", "Count", "int", 4, minimum=1, maximum=120),
         ParamSpec("length", "Length", "length", 5.0, minimum=0.05),
-        ParamSpec("droop", "Droop angle", "angle", 0.0, minimum=-60.0, maximum=80.0,
-                  help="0° is horizontal, positive slopes the radials downward.",
+        ParamSpec("droop", "Droop angle", "angle", 0.0, minimum=-85.0, maximum=85.0,
+                  help="0° is horizontal, positive slopes the radials downward, "
+                       "negative slopes them upward.",
                   visible_when=("mode", ("wires",))),
         ParamSpec("azimuth", "Azimuth offset", "angle", 0.0, minimum=0.0, maximum=360.0,
                   visible_when=("mode", ("wires",))),
@@ -43,8 +44,9 @@ TOP_HAT = PartType(
     (
         ParamSpec("spokes", "Spokes", "int", 4, minimum=2, maximum=16),
         ParamSpec("length", "Spoke length", "length", 1.0, minimum=0.05),
-        ParamSpec("droop", "Droop angle", "angle", 0.0, minimum=-45.0, maximum=60.0,
-                  help="0° is horizontal, positive slopes the spokes downward."),
+        ParamSpec("droop", "Droop angle", "angle", 0.0, minimum=-85.0, maximum=85.0,
+                  help="0° is horizontal, positive slopes the spokes downward, "
+                       "negative slopes them upward."),
         ParamSpec("ring", "Perimeter ring", "bool", True),
         ParamSpec("diameter", "Wire diameter", "small_length", 2.0e-3, minimum=1e-5),
     ),
