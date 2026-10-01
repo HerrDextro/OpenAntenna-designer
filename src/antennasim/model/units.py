@@ -23,6 +23,7 @@ _FIXED_UNITS = {
     "frequency": "MHz",
     "inductance": "µH",
     "resistance": "Ω",
+    "percent": "%",
 }
 
 

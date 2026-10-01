@@ -11,7 +11,7 @@ from ..model.params import ParamSpec
 from ..model.units import to_display, unit_label
 
 _DECIMALS = {"length": 3, "small_length": 2, "angle": 1, "frequency": 4, "inductance": 3,
-             "resistance": 2, "float": 2}
+             "resistance": 2, "percent": 1, "float": 2}
 
 
 def format_param(spec: ParamSpec, value: Any, units: str) -> str:
@@ -29,7 +29,9 @@ def format_param(spec: ParamSpec, value: Any, units: str) -> str:
 def node_sections(project: Project) -> list[tuple[str, list[tuple[str, str]]]]:
     """[(section title, [(label, value), ...]), ...] for every editable node."""
     nodes = [(NODE_ANTENNA, project.template.name)]
-    nodes += [(part.id, part.label) for part in project.parts]
+    nodes += [(part.id, project.part_label(part) + ("" if project.part_active(part)
+                                                     else " (inactive)"))
+              for part in project.parts]
     nodes += [(NODE_ENVIRONMENT, "Ground & materials"), (NODE_FEEDLINE, "Feed system"),
               (NODE_SIMULATION, "Frequencies")]
     sections = []

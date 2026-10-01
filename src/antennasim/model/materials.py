@@ -45,6 +45,9 @@ class CoaxType:
     # loss(f) = k1*sqrt(f) + k2*f (conductor + dielectric loss).
     loss_10: float
     loss_100: float
+    # Outside diameter of the shield, for modelling common-mode current on it.
+    # None for balanced line, which has no shield.
+    shield_diameter_m: float | None = None
 
     def matched_loss_db_per_m(self, freq_mhz: float) -> float:
         # Solve k1*sqrt(10)+k2*10 = loss_10 and k1*10+k2*100 = loss_100.
@@ -58,11 +61,11 @@ class CoaxType:
 
 
 COAX: dict[str, CoaxType] = {
-    "rg58": CoaxType("RG-58", 50.0, 0.66, 1.4, 4.9),
-    "rg8x": CoaxType("RG-8X", 50.0, 0.78, 1.1, 3.7),
-    "rg213": CoaxType("RG-213", 50.0, 0.66, 0.6, 2.2),
-    "lmr400": CoaxType("LMR-400", 50.0, 0.85, 0.4, 1.3),
-    "rg6": CoaxType("RG-6 (75 Ω)", 75.0, 0.82, 0.6, 2.0),
+    "rg58": CoaxType("RG-58", 50.0, 0.66, 1.4, 4.9, 4.95e-3),
+    "rg8x": CoaxType("RG-8X", 50.0, 0.78, 1.1, 3.7, 6.1e-3),
+    "rg213": CoaxType("RG-213", 50.0, 0.66, 0.6, 2.2, 10.3e-3),
+    "lmr400": CoaxType("LMR-400", 50.0, 0.85, 0.4, 1.3, 10.3e-3),
+    "rg6": CoaxType("RG-6 (75 Ω)", 75.0, 0.82, 0.6, 2.0, 6.9e-3),
     "ladder450": CoaxType("450 Ω ladder line", 450.0, 0.91, 0.06, 0.3),
 }
 

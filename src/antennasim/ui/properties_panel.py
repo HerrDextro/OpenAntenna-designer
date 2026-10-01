@@ -15,9 +15,9 @@ from .controller import DocumentController
 from .formatting import node_sections, settings_text
 
 _DECIMALS = {"length": 3, "small_length": 2, "angle": 1, "frequency": 4, "inductance": 3,
-             "resistance": 2, "float": 3}
+             "resistance": 2, "percent": 1, "float": 3}
 _STEPS = {"length": 0.05, "small_length": 0.5, "angle": 5.0, "frequency": 0.05,
-          "inductance": 0.5, "resistance": 1.0, "float": 0.1}
+          "inductance": 0.5, "resistance": 1.0, "percent": 1.0, "float": 0.1}
 
 
 class SnappingDoubleSpinBox(QDoubleSpinBox):
@@ -94,7 +94,7 @@ class PropertiesPanel(QWidget):
 
         titles = {"antenna": project.template.name, "environment": "Ground & materials",
                   "feedline": "Feed system", "simulation": "Frequencies"}
-        self.title.setText(titles.get(node_id) or project.part(node_id).label)
+        self.title.setText(titles.get(node_id) or project.part_label(project.part(node_id)))
 
         values = project.node_values(node_id)
         for spec in specs:

@@ -13,8 +13,9 @@ from PySide6.QtWidgets import (QGraphicsEllipseItem, QGraphicsItem, QGraphicsPat
                                QGraphicsRectItem, QGraphicsScene, QGraphicsSimpleTextItem,
                                QGraphicsView, QMenu)
 
-from ..model.document import NODE_ANTENNA
+from ..model.document import NODE_ANTENNA, NODE_FEEDLINE
 from ..model.units import format_length
+from ..templates import coax
 from ..templates.base import SIDE, TOP, Handle
 from .actions import populate_part_menu
 from .controller import DocumentController
@@ -25,7 +26,11 @@ KIND_COLORS = {
     "top_hat": QColor("#c8641e"),
     "loading_coil": QColor("#b22222"),
     "environment": QColor("#1f4e8c"),
+    "coax_run": QColor("#3c3c3c"),
+    "feedline": QColor("#3c3c3c"),
+    "choke": QColor("#7b3fa0"),
 }
+COAX_KINDS = ("coax_run", "feedline")
 SELECT_COLOR = QColor("#f0a800")
 GROUND_COLOR = QColor("#8b6f47")
 DIM_COLOR = QColor("#606060")
@@ -99,9 +104,11 @@ class DiagramView(QGraphicsView):
 
         for w in model.wires:
             a, b = self._project(w.p1), self._project(w.p2)
-            kind = kinds.get(w.part_id, "antenna")
+            kind = kinds.get(w.part_id, "feedline" if w.part_id == NODE_FEEDLINE else "antenna")
             color = KIND_COLORS.get(kind, KIND_COLORS["antenna"])
-            is_selected = w.part_id == selected or (selected == NODE_ANTENNA and kind == "antenna")
+            is_selected = (w.part_id == selected
+                           or (selected == NODE_ANTENNA and kind == "antenna")
+                           or (selected == NODE_FEEDLINE and kind in COAX_KINDS))
             width = 3.5 if kind in ("antenna", "loading_coil") else 2.5
             path = QPainterPath(a)
             path.lineTo(b)
@@ -126,6 +133,9 @@ class DiagramView(QGraphicsView):
             self._add_path(path, KIND_COLORS.get(kind, DIM_COLOR), 2, deco.part_id,
                            "Buried / ground radial", deco.part_id == selected, style)
 
+        if coax.is_modelled(project) and model.wires:
+            self._feedline_markers(project, selected)
+
         if model.source is not None and model.wires and self.view_kind == SIDE:
             src = model.wires[model.source.wire]
             t = model.source.fraction
@@ -137,7 +147,8 @@ class DiagramView(QGraphicsView):
             if dim.view == self.view_kind:
                 self._dimension(dim)
 
-        self._handles = [h for h in project.template.handles(project) if h.view == self.view_kind]
+        handles = project.template.handles(project) + coax.handles(project)
+        self._handles = [h for h in handles if h.view == self.view_kind]
         for i, h in enumerate(self._handles):
             item = QGraphicsEllipseItem(-6, -6, 12, 12)
             item.setPos(QPointF(*h.pos))
@@ -185,6 +196,28 @@ class DiagramView(QGraphicsView):
                                 start.y() + uy * 2 * half * t + ny * s))
         path.lineTo(QPointF(center.x() + ux * half, center.y() + uy * half))
         self._add_path(path, KIND_COLORS["loading_coil"], 2.5, part_id, "Loading coil", selected, z=4)
+
+    def _feedline_markers(self, project, selected):
+        """The radio at the end of the coax, and a bead for each choke."""
+        radio = self._project(coax.radio_point(project))
+        self._box(radio, 14, 10, QColor("#f2f2f2"), KIND_COLORS["feedline"], NODE_FEEDLINE,
+                  "Radio", selected == NODE_FEEDLINE)
+        self._label(radio, "radio", KIND_COLORS["feedline"], dx=0, dy=16)
+        for part_id, point in coax.choke_points(project):
+            self._box(self._project(point), 10, 16, KIND_COLORS["choke"], KIND_COLORS["choke"],
+                      part_id, "Common-mode choke", selected == part_id)
+
+    def _box(self, pos: QPointF, w: float, h: float, fill: QColor, edge: QColor, part_id: str,
+             tip: str, selected: bool):
+        item = QGraphicsRectItem(-w / 2, -h / 2, w, h)
+        item.setPos(pos)
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+        item.setBrush(QBrush(fill))
+        item.setPen(QPen(SELECT_COLOR if selected else edge, 3 if selected else 1.5))
+        item.setZValue(6)
+        item.setToolTip(tip)
+        item.setData(_KEY_PART, part_id)
+        self.scene().addItem(item)
 
     def _marker(self, pos: QPointF, size: float, fill: QColor, edge: QColor, part_id: str, tip: str):
         item = QGraphicsEllipseItem(-size / 2, -size / 2, size, size)

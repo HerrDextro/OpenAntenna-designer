@@ -135,3 +135,92 @@ def ground_dependence(model: WireModel, design_mhz: float, soil_label: str) -> I
     return Issue(INFO, f"Not free space: the feed point {where} ({soil_label}). The soil sets "
                        f"the pattern shape and take-off angle; the impedance is affected less "
                        f"at this height.", "environment")
+
+
+def segment_distance(p1, q1, p2, q2) -> float:
+    """Shortest distance between line segments p1-q1 and p2-q2 (Ericson's method)."""
+    d1 = [q1[i] - p1[i] for i in range(3)]
+    d2 = [q2[i] - p2[i] for i in range(3)]
+    r = [p1[i] - p2[i] for i in range(3)]
+
+    def dot(u, v):
+        return u[0] * v[0] + u[1] * v[1] + u[2] * v[2]
+
+    a, e, f = dot(d1, d1), dot(d2, d2), dot(d2, r)
+    if a < 1e-18 and e < 1e-18:
+        return math.dist(p1, p2)
+    if a < 1e-18:
+        s, t = 0.0, min(max(f / e, 0.0), 1.0)
+    else:
+        c = dot(d1, r)
+        if e < 1e-18:
+            s, t = min(max(-c / a, 0.0), 1.0), 0.0
+        else:
+            b = dot(d1, d2)
+            denom = a * e - b * b
+            s = min(max((b * f - c * e) / denom, 0.0), 1.0) if denom > 1e-18 else 0.0
+            t = (b * s + f) / e
+            if t < 0:
+                s, t = min(max(-c / a, 0.0), 1.0), 0.0
+            elif t > 1:
+                s, t = min(max((b - c) / a, 0.0), 1.0), 1.0
+    c1 = [p1[i] + d1[i] * s for i in range(3)]
+    c2 = [p2[i] + d2[i] * t for i in range(3)]
+    return math.dist(c1, c2)
+
+
+def clearance_issues(model: WireModel, checked: set[int], joined: set[int],
+                     feed) -> list[Issue]:
+    """Wires in `checked` (e.g. the coax) that touch, cross or run along another wire.
+
+    NEC2 joins wires that share an end point, and only there; wires that meet
+    anywhere else are not connected, and wires closer than a few radii are
+    modelled poorly. `checked` wires may only share ends with the `joined`
+    wires (each other, an earth lead) and with the antenna at `feed`.
+    """
+    issues: list[Issue] = []
+    seen: set[frozenset] = set()
+    for i in sorted(checked):
+        wi = model.wires[i]
+        found: list[Issue] = []
+        for j, wj in enumerate(model.wires):
+            pair = frozenset((i, j))
+            if j == i or pair in seen:
+                continue
+            seen.add(pair)
+            touching = wi.radius + wj.radius
+            shared = [p for p in (wi.p1, wi.p2) for q in (wj.p1, wj.p2)
+                      if math.dist(p, q) < 1e-6]
+            if shared:
+                joint = shared[0]
+                if j not in joined and math.dist(joint, feed) > 1e-6:
+                    found.append(Issue(ERROR, f"{wi.name} ends exactly on the end of {wj.name}, "
+                                               f"which connects them. Move it slightly.",
+                                       wi.part_id))
+                    continue
+                # Joined at an end: only a problem if they leave it side by side.
+                far_i = wi.p2 if math.dist(wi.p1, joint) < 1e-6 else wi.p1
+                far_j = wj.p2 if math.dist(wj.p1, joint) < 1e-6 else wj.p1
+                ui = [(far_i[k] - joint[k]) / max(wi.length, 1e-12) for k in range(3)]
+                uj = [(far_j[k] - joint[k]) / max(wj.length, 1e-12) for k in range(3)]
+                cos = sum(a * b for a, b in zip(ui, uj))
+                if cos > math.cos(math.radians(10)):
+                    found.append(Issue(ERROR, f"{wi.name} runs along {wj.name} from where they "
+                                               f"join. Lead the coax away from the antenna "
+                                               f"first with a coax run.", wi.part_id))
+                continue
+            gap = segment_distance(wi.p1, wi.p2, wj.p1, wj.p2)
+            if gap < touching:
+                found.append(Issue(ERROR, f"{wi.name} touches or crosses {wj.name}. NEC2 only "
+                                           f"connects wires at their ends; reroute it.", wi.part_id))
+            elif gap < 3 * touching:
+                found.append(Issue(WARNING, f"{wi.name} passes within {gap * 1000:.0f} mm of "
+                                             f"{wj.name}; NEC2 is inaccurate this close.",
+                                    wi.part_id))
+        # A coax lying along a leg also "touches" the coil in that leg, and a leg
+        # split by a coil is several wires: say the most useful thing once.
+        along = [x for x in found if "runs along" in x.message]
+        for issue in along or found:
+            if issue not in issues:
+                issues.append(issue)
+    return issues

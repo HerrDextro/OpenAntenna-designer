@@ -8,18 +8,21 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .analysis import pattern as pattern_analysis
+from .analysis.common_mode import CommonModeReport, required_choke
 from .analysis.farfield import compute_pattern
 from .analysis.feedline import FeedResult, apply_feed_system
 from .analysis.ground_loss import estimate_ground_loss
 from .analysis.swr import bandwidth, resonances, swr
 from .analysis.tuner import TuneResult, find_resonance
 from .geometry.segmentation import choose_segment_length, segment, target_segment_length
-from .geometry.validation import ERROR, INFO, Issue, ground_dependence, validate_model
-from .geometry.wire_model import GroundModel, Load, WireModel
+from .geometry.validation import (ERROR, INFO, Issue, clearance_issues, ground_dependence,
+                                  validate_model)
+from .geometry.wire_model import GroundModel, Load, Source, WireModel
 from .model.document import NODE_ENVIRONMENT, NODE_SIMULATION, Project
 from .model.materials import CONDUCTORS, GROUNDS
 from .solver.base import SolveRequest, SolverBackend
 from .solver.results import Pattern, SolveResult
+from .templates import coax
 from .templates.base import BuildContext, Tunable
 
 
@@ -35,6 +38,7 @@ class BuiltModel:
     solve_ground: GroundModel  # ground NEC2 solves currents over
     ground_loss_ohm: float | None
     issues: list[Issue]
+    shield: coax.ShieldInfo | None = None  # the coax shield, when common mode is modelled
 
     @property
     def has_errors(self) -> bool:
@@ -64,9 +68,12 @@ def build(project: Project) -> BuiltModel:
     issues += template.validate(project)
     # Build once to measure the antenna, then again with the segment length that
     # suits its size: coil wires are one segment long, so they depend on it.
+    # The coax is added afterwards, so a long feedline does not coarsen the antenna.
     draft = template.build(project, BuildContext(target_segment_length(f_max, spw)))
     seg_length = choose_segment_length(draft, f_max, spw)
     model = template.build(project, BuildContext(seg_length))
+    issues += coax.validate(project)
+    shield = coax.add_shield(model, project)
 
     if env["ground"] == "real":
         soil = GROUNDS[env["soil"]]
@@ -98,11 +105,24 @@ def build(project: Project) -> BuiltModel:
                                   f"pattern uses the real soil.", NODE_ENVIRONMENT))
 
     issues += validate_model(model, f_min, f_max)
+    if shield is not None:
+        joined = set(shield.wires) | ({shield.earth_wire} if shield.earth_wire is not None else set())
+        issues += clearance_issues(model, set(shield.wires), joined,
+                                   template.feed_point(project))
     reliance = ground_dependence(model, sim["design_mhz"],
                                  GROUNDS[env["soil"]].label if env["ground"] == "real" else "")
     if reliance is not None:
         issues.append(reliance)
-    return BuiltModel(model, solve_ground, ground_loss, issues)
+    return BuiltModel(model, solve_ground, ground_loss, issues, shield)
+
+
+def feed_config(project: Project) -> dict:
+    """Feedline settings for the loss and impedance maths. With the shield modelled,
+    the coax length follows its route instead of the length field."""
+    cfg = dict(project.feedline)
+    if coax.is_modelled(project):
+        cfg["length"] = coax.feedline_length(project)
+    return cfg
 
 
 @dataclass
@@ -124,9 +144,11 @@ class Summary:
     elevation_beamwidth_deg: float | None
     azimuth_variation_db: float
     feedline_loss_db: float
+    feedline_length_m: float
     ground_loss_ohm: float | None
     segments: int
     wires: int
+    common_mode: CommonModeReport | None = None
 
 
 @dataclass
@@ -147,7 +169,7 @@ def simulate(project: Project, backend: SolverBackend) -> Simulation:
     built = build(project)
     if built.has_errors:
         raise SimulationBlocked(built.issues)
-    sim, feed_cfg = project.simulation, project.feedline
+    sim, feed_cfg = project.simulation, feed_config(project)
     freqs = sweep_frequencies(project)
     design = sim["design_mhz"]
 
@@ -185,12 +207,67 @@ def simulate(project: Project, backend: SolverBackend) -> Simulation:
         elevation_beamwidth_deg=ps.elevation_beamwidth_deg,
         azimuth_variation_db=ps.azimuth_variation_db,
         feedline_loss_db=float(design_feed.total_loss_db[0]),
+        feedline_length_m=feed_cfg["length"],
         ground_loss_ohm=built.ground_loss_ohm,
         segments=sum(max(w.segments, 1) for w in built.model.wires),
         wires=len(built.model.wires),
+        common_mode=(_common_mode(project, built, backend, d.currents)
+                     if built.shield is not None else None),
     )
     return Simulation(built, result, pat, freqs, z_ant, feed, swr_fp, swr_rig, summary,
                       built.issues)
+
+
+def _segment_index(model: WireModel, wire: int, fraction: float) -> int:
+    """0-based index of a wire's segment in NEC's flat segment order."""
+    before = sum(max(w.segments, 1) for w in model.wires[:wire])
+    return before + model.wires[wire].segment_at(fraction) - 1
+
+
+def _common_mode(project: Project, built: BuiltModel, backend: SolverBackend,
+                 currents: np.ndarray) -> CommonModeReport:
+    """Shield currents from the simulation, and the choke the shield needs.
+
+    The requirement uses two extra solves at the design frequency (see
+    analysis.common_mode): one driving the feed and one driving the choke
+    point, with the choke under study removed.
+    """
+    model, shield = built.model, built.shield
+    design = project.simulation["design_mhz"]
+    feed = _segment_index(model, model.source.wire, model.source.fraction)
+
+    # Distance along the coax at the middle of each of its segments.
+    shield_segments, distances = [], []
+    start = 0.0
+    for index in shield.wires:
+        w = model.wires[index]
+        n = max(w.segments, 1)
+        first = _segment_index(model, index, 0.0)
+        for k in range(n):
+            shield_segments.append(first + k)
+            distances.append(start + w.length * (k + 0.5) / n)
+        start += w.length
+    shield_segments = np.array(shield_segments)
+
+    mags = np.abs(currents[shield_segments]) / max(abs(currents[feed]), 1e-30)
+    peak = int(np.argmax(mags))
+
+    port = _segment_index(model, *shield.port)
+    loads = [ld for i, ld in enumerate(model.loads) if i != shield.port_load]
+    study = dataclasses.replace(built.solver_model(), loads=loads)
+    drive_feed = backend.solve(SolveRequest(study, (), design)).design.currents
+    drive_port = backend.solve(SolveRequest(
+        dataclasses.replace(study, source=Source(*shield.port)), (), design)).design.currents
+    downstream = shield_segments[shield_segments >= port]
+    target = project.feedline["cm_target"] / 100
+    requirement = required_choke(drive_feed, drive_port, feed, port, downstream, target)
+
+    chokes = [(project.part_label(project.part(pid)), along,
+               coax.choke_impedance(project, project.part(pid), design))
+              for pid, along, _ in shield.chokes]
+    return CommonModeReport(float(mags[0]), float(mags[peak]), float(distances[peak]),
+                            shield.length_m, target, shield.port_distance_m, requirement,
+                            chokes)
 
 
 def solve_impedance(project: Project, backend: SolverBackend, freq_mhz: float) -> complex:

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QLab
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..model.units import format_length
+from ..templates import coax
 from .controller import DocumentController
 from .formatting import cut_list_text
 
@@ -55,7 +56,7 @@ class CutListView(QWidget):
     def rows(self) -> list[tuple[str, str, str, str]]:
         project = self.ctl.project
         out = []
-        for item in project.template.cut_list(project):
+        for item in project.template.cut_list(project) + coax.cut_items(project):
             length = format_length(item.length_m, project.units) if item.length_m > 0 else ""
             out.append((item.name, str(item.quantity), length, item.note))
         return out

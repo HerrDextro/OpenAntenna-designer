@@ -53,6 +53,9 @@ class MonopoleTemplate(AntennaTemplate):
         top = (0.0, 0.0, a["feed_height"] + a["height"])
         return a, base, top
 
+    def feed_point(self, project: "Project"):
+        return self._points(project)[1]
+
     def feed_is_grounded(self, project: "Project") -> bool:
         return project.antenna["feed_height"] <= _EPS and project.environment["ground"] != "free_space"
 

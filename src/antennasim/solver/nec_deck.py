@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from ..geometry.wire_model import GroundModel, WireModel
+from ..geometry.wire_model import FIXED, PARALLEL, GroundModel, WireModel
 
 
 def _num(x: float) -> str:
@@ -34,8 +34,14 @@ def _load_cards(model: WireModel, freq_mhz: float) -> list[str]:
     for load in model.loads:
         seg = model.wires[load.wire].segment_at(load.fraction)
         tag = load.wire + 1
-        cards.append(f"LD 0 {tag} {seg} {seg} {_num(load.resistance_at(freq_mhz))} "
-                     f"{_num(load.l_uh * 1e-6)} 0")
+        if load.kind == FIXED:
+            cards.append(f"LD 4 {tag} {seg} {seg} {_num(load.r_ohm)} {_num(load.x_ohm)}")
+        elif load.kind == PARALLEL:
+            cards.append(f"LD 1 {tag} {seg} {seg} {_num(load.r_ohm)} "
+                         f"{_num(load.l_uh * 1e-6)} {_num(load.c_pf * 1e-12)}")
+        else:
+            cards.append(f"LD 0 {tag} {seg} {seg} {_num(load.resistance_at(freq_mhz))} "
+                         f"{_num(load.l_uh * 1e-6)} 0")
     return cards
 
 

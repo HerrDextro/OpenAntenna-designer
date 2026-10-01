@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMenu
 
-from ..model.parts import PART_TYPES
+from ..model.parts import FEEDLINE_PART_KINDS, PART_TYPES
 from .controller import DocumentController
 
 
@@ -15,14 +15,18 @@ def populate_part_menu(ctl: DocumentController, menu: QMenu, part_id: str | None
     parts = {p.id for p in project.parts}
     if part_id in parts:
         part = project.part(part_id)
-        remove = QAction(f"Remove {part.label}", menu)
+        remove = QAction(f"Remove {project.part_label(part)}", menu)
         remove.triggered.connect(lambda: ctl.remove_part(part.id))
         menu.addAction(remove)
         menu.addSeparator()
     for kind, ptype in PART_TYPES.items():
-        if kind not in project.template.allowed_parts:
+        if not project.part_allowed(kind):
             continue
+        if kind in FEEDLINE_PART_KINDS and kind == FEEDLINE_PART_KINDS[0]:
+            menu.addSeparator()
         act = QAction(f"Add {ptype.label}", menu)
         act.setEnabled(project.can_add_part(kind))
+        if kind in FEEDLINE_PART_KINDS and not project.feedline["common_mode"]:
+            act.setToolTip("Turn on 'Model coax shield' in Feed system first")
         act.triggered.connect(lambda _=False, k=kind: ctl.add_part(k))
         menu.addAction(act)

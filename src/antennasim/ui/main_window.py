@@ -302,7 +302,7 @@ class MainWindow(QMainWindow):
     def _update_part_actions(self):
         project = self.ctl.project
         for kind, act in self.part_actions.items():
-            act.setVisible(self.has_document and kind in project.template.allowed_parts)
+            act.setVisible(self.has_document and project.part_allowed(kind))
             act.setEnabled(self.has_document and project.can_add_part(kind))
         self.act_remove.setEnabled(self.has_document
                                    and self.ctl.selected in {p.id for p in project.parts})

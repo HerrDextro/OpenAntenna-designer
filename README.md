@@ -32,6 +32,10 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
   - reference impedance
   - balun / unun ratio
   - coax type and length: RG-58, RG-8X, RG-213, LMR-400, RG-6, ladder line
+- **Common mode on the coax:**
+  - The outside of the coax shield can be modelled as a wire, so current on it, its radiation and the detuning it causes are all simulated.
+  - Route the coax with **coax runs** (length, direction, slope), each draggable in the diagram, down to a floating or earthed radio.
+  - Add **common-mode chokes** anywhere along it: perfect, a known impedance (ferrite), or coax wound on a form, whose inductance and self-resonance are estimated for you.
 - Undo / redo, metric and imperial units, and save/load as `.antsim` files.
 
 ### Results
@@ -39,6 +43,7 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
   - input impedance, SWR at the feed point and at the radio, feedline loss
   - max gain, take-off angle, elevation beamwidth, radiation efficiency
   - azimuth variation: how far from omnidirectional, and in which direction
+  - with the coax modelled: common-mode current at the feed and its peak along the coax, and **the choke impedance needed** to get it under your target
 - **Across the frequency sweep:** resonant frequency and SWR bandwidth.
 - **Plots:**
   - SWR and impedance sweeps, with your zoom kept between runs and a **Reset zoom** button
@@ -52,7 +57,7 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
 ### Tools
 - **Tune to resonance:** adjusts element length, coil inductance, top hat or radial length until reactance is zero. It always finds the *fundamental* resonance rather than an antiresonance or a higher-order one, whatever value you start from, and explains itself when a parameter cannot reach resonance.
 - **Coil calculator:** turns, coil length and wire needed for a target inductance.
-- **Cut list:** its own tab with everything you need to cut before you build.
+- **Cut list:** its own tab with everything you need to cut before you build, including the coax and any choke windings.
 - **Model checks:**
   - warnings when a design breaks NEC2's modeling rules, so you don't trust bad numbers
   - a standing notice of **how much the results lean on the ground**, since only free space is soil-independent
@@ -73,6 +78,10 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
 | 80 m inverted L with buried radials | 3D view |
 |---|---|
 | ![Inverted L](docs/images/diagram-inverted-l.png) | ![3D view](docs/images/view3d.png) |
+
+**Common mode:** a loaded vertical CB dipole with its coax led 1 m sideways before dropping to the radio, and a choke at the feed. The results show how much current is left on the shield, and how big a choke this route needs.
+
+![Coax routing and choke](docs/images/common-mode.png)
 
 ---
 
@@ -118,7 +127,8 @@ You can also open a saved design directly: `python -m antennasim mydesign.antsim
 4. Add parts from the toolbar, or right-click the diagram or part tree.
 5. Open **Tune…** to make the antenna resonant at your design frequency, then **Apply**.
 6. Press **Save reference** (Ctrl+R), change something, and compare the two side by side.
-7. Check the **Cut list** tab and go build it.
+7. To see what the coax does, pick a coax type under **Feed system**, tick **Model coax shield**, then add coax runs and chokes.
+8. Check the **Cut list** tab and go build it.
 
 ---
 
@@ -137,6 +147,11 @@ Project (.antsim) → Template → 3D wire model → Model checks
 - **Far-field patterns** (`src/antennasim/analysis/farfield.py`) are computed from the NEC segment currents using the reflection-coefficient ground model. The test suite checks them against NEC's own output; they agree within 0.02 dB.
 - **Segmentation** (`src/antennasim/geometry/segmentation.py`) uses the finer of two rules: a fraction of a wavelength, and at least 40 segments across the antenna's own size. The second matters for short loaded antennas, where the wavelength rule alone gave a 0.29 λ loaded dipole 8 segments and tuned its coils 8% high.
 - **Ground-mounted verticals over real soil:** NEC2 cannot connect a wire to lossy ground. For these, the current solution uses perfect ground plus a ground-loss resistance at the feed point, while the pattern still uses the real soil. Elevated antennas use NEC2's full Sommerfeld real-ground solution.
+- **Common mode** (`src/antennasim/templates/coax.py`, `src/antennasim/analysis/common_mode.py`):
+  - At HF, skin effect splits a coax into two conductors. The inside is the transmission line, handled by the feedline maths. The **outside of the shield** is just another wire, joined to the cold side of the feed point. That wire follows the coax runs and is added to the NEC model after segmentation is chosen, so a long coax does not coarsen the antenna.
+  - Chokes are lumped loads on that wire: a huge resistance for a perfect choke, a fixed R + jX, or a parallel RLC for coax wound on a form (Wheeler inductance, Medhurst self-capacitance).
+  - **Choke requirement:** the structure is linear, so two extra solves give the shield currents for *every* possible choke at once. One drives the feed with the choke point shorted; the other drives the choke point with the feed shorted. The required resistance then comes from a quick search, without re-running NEC. The test suite checks it against a direct simulation with that choke.
+  - A choke only stops current *conducted* from the feed. Current the antenna's field induces further down the coax remains, and the results say so when no choke can reach the target.
 - **Tuning** (`src/antennasim/analysis/tuner.py`) scans upward and takes the first negative-to-positive crossing of reactance. Element length runs through a fundamental resonance, then an antiresonance (a pole, not a zero), then higher-order resonances, so simply bracketing a sign change lands on the wrong one.
 
 ### Project layout
@@ -144,14 +159,16 @@ Project (.antsim) → Template → 3D wire model → Model checks
 ```
 src/antennasim/
   model/       project document, parameter specs, units, materials & coax data
-  templates/   antenna types (monopole.py, dipole.py) and the template interface
+  templates/   antenna types (monopole.py, dipole.py), the coax route and chokes (coax.py),
+               and the template interface
   geometry/    wire model, automatic segmentation, model validity checks
   solver/      NEC deck writer, nec2c backend, result types
-  analysis/    far field, SWR/bandwidth, feedline, ground loss, coil design, tuner
+  analysis/    far field, SWR/bandwidth, feedline, common mode, ground loss, coil and
+               choke design, tuner
   fileio/      .antsim save/load, .nec export
   ui/          PySide6 main window, start screen, diagram editor, plots, 3D view,
                cut list, comparisons, dialogs
-tests/         solver reference cases, analysis, both templates, UI smoke tests
+tests/         solver reference cases, analysis, both templates, common mode, UI smoke tests
 third_party/   nec2c source + build script
 ```
 
@@ -161,7 +178,7 @@ third_party/   nec2c source + build script
 python -m pytest
 ```
 
-The suite runs the real solver and the real UI (offscreen). It covers NEC2 reference cases (a quarter-wave monopole gives about 36 Ω, a half-wave dipole about 73 Ω), far-field agreement with NEC's own pattern output, the analysis maths, both templates, and UI behaviour including tuning, comparisons and recovery from solver failures.
+The suite runs the real solver and the real UI (offscreen). It covers NEC2 reference cases (a quarter-wave monopole gives about 36 Ω, a half-wave dipole about 73 Ω), far-field agreement with NEC's own pattern output, the analysis maths, both templates, common mode (including the choke requirement against a direct simulation), and UI behaviour including tuning, comparisons and recovery from solver failures.
 
 ---
 
@@ -169,6 +186,8 @@ The suite runs the real solver and the real UI (offscreen). It covers NEC2 refer
 
 - [x] **V1:** monopole / vertical, inverted L, radials, top hat, loading coil
 - [x] Dipole: flat, inverted V, sloper and vertical, with symmetric loading coils
+- [x] Coax common mode: shield modelled as a wire, coax routing, chokes, required choke impedance
+- [ ] Sleeve (coaxial) dipole
 - [ ] Fan dipole and traps
 - [ ] End-fed / random wire with unun
 - [ ] Loops: resonant loop (quad / delta) and magnetic loop (with capacitor voltage and efficiency)
@@ -177,12 +196,14 @@ The suite runs the real solver and the real UI (offscreen). It covers NEC2 refer
 
 ## Accuracy notes
 
-Treat simulated results as a strong starting point, not a guarantee. Nearby objects, masts, walls, feedline common-mode currents and real soil all shift a real antenna.
+Treat simulated results as a strong starting point, not a guarantee. Nearby objects, masts, walls, the feedline and real soil all shift a real antenna. Common mode is only simulated when you model the coax shield.
 - Only free space is soil-independent. Over ground, the soil sets the pattern and take-off angle, and below about 0.2 λ it pulls the feed impedance around as well. Model checks tells you which case you are in.
 - The ground-loss resistance for buried radials is a rule-of-thumb estimate. You can enter a measured value manually instead.
 - Coax loss figures are typical datasheet values.
 - Loading coils are modeled as lumped RLC loads. Coil self-resonance and physical coil length are not modeled.
 - Insulated wire is not modeled; cut lengths are for bare wire.
+- The coax jacket is not modeled either. It slows the wave on the outside of the shield slightly, so real common-mode resonances sit a few percent lower in frequency than simulated.
+- Wound coax chokes have more self-capacitance than the solenoid estimate, so they self-resonate lower than predicted. Measure a real choke if you can and enter it as a known impedance. A known impedance is held constant across the sweep.
 
 ## License
 

@@ -10,10 +10,12 @@ from PySide6.QtWidgets import (QAbstractItemView, QFrame, QGridLayout, QGroupBox
                                QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
                                QTabWidget, QVBoxLayout, QWidget)
 
+from ..analysis.common_mode import MET, NEEDS
 from ..engine import Simulation
 from ..geometry.validation import ERROR, INFO, WARNING
 from ..model.materials import COAX
 from ..model.units import format_length
+from ..templates.coax import PERFECT_CHOKE_OHM
 from .controller import DocumentController
 from .formatting import results_text
 
@@ -22,6 +24,10 @@ _LEVEL_STYLE = {ERROR: ("✖", "#c62828"), WARNING: ("⚠", "#b26a00"), INFO: ("
 CHANGED_COLOR = "#0b6bcb"
 BASELINE_COLOR = "#7b5cd6"
 HIGHLIGHT_MS = 6000
+
+
+def _fmt_ohm(r: float) -> str:
+    return f"{r / 1000:.1f} kΩ" if r >= 1000 else f"{r:.0f} Ω"
 
 
 def _fmt_z(z: complex) -> str:
@@ -164,9 +170,11 @@ class ResultsPanel(QWidget):
             widget = self.grid.takeAt(0).widget()
             if widget is None or widget is self.status:
                 continue
-            # Unparent as well as delete: deleteLater() alone leaves the old row
+            # Hide as well as delete: deleteLater() alone leaves the old row
             # painted on top of the new one until the event loop catches up.
-            widget.setParent(None)
+            # (Never unparent it: a parentless widget becomes a top-level window
+            # and flashes up on screen.)
+            widget.hide()
             widget.deleteLater()
         rows = self._summary_rows()
         if not rows:
@@ -204,10 +212,10 @@ class ResultsPanel(QWidget):
         if fl["transformer_ratio"] != 1.0:
             rows.append((f"After {fl['transformer_ratio']:g}:1", _fmt_z(s.z_feedpoint), ""))
         rows.append(("SWR at feed point", f"{s.swr_feedpoint:.2f}", f"Relative to {fl['z0']:g} Ω"))
-        if fl["coax"] != "none" and fl["length"] > 0:
+        if fl["coax"] != "none" and s.feedline_length_m > 0:
             coax = COAX[fl["coax"]].label
             rows.append(("SWR at radio", f"{s.swr_rig:.2f}",
-                         f"After {format_length(fl['length'], units, 1)} of {coax}"))
+                         f"After {format_length(s.feedline_length_m, units, 1)} of {coax}"))
             rows.append(("Feedline loss", f"{s.feedline_loss_db:.2f} dB", "Including mismatch loss"))
         res = ", ".join(f"{f:.3f}" for f in s.resonances_mhz) or "none in sweep"
         rows.append(("Resonance (X = 0)", f"{res} MHz" if s.resonances_mhz else res, ""))
@@ -238,7 +246,53 @@ class ResultsPanel(QWidget):
                          "resistance. Ground reflection loss shows in gain instead."))
         if s.ground_loss_ohm is not None:
             rows.append(("Ground loss", f"{s.ground_loss_ohm:.1f} Ω", "Series loss resistance"))
+        if s.common_mode is not None:
+            rows += self._common_mode_rows(s.common_mode, units)
         rows.append(("Model", f"{s.wires} wires, {s.segments} segments", ""))
+        return rows
+
+    @staticmethod
+    def _common_mode_rows(cm, units: str) -> list[tuple[str, str, str]]:
+        def pct(ratio: float) -> str:
+            return f"{ratio * 100:.1f} % ({cm.db(ratio):.0f} dB)".replace("-", "−")
+
+        target = f"{cm.target * 100:g} %"
+        rows = [
+            ("Common mode at feed", pct(cm.at_feed),
+             "Current on the outside of the coax shield where it leaves the feed point, "
+             "relative to the antenna current."),
+            ("Common mode peak",
+             f"{cm.peak * 100:.1f} % at {format_length(cm.peak_distance_m, units, 2)}",
+             "Largest shield current anywhere along the coax, and its distance from the feed. "
+             "Standing waves can make it larger further down than at the feed."),
+        ]
+        req = cm.requirement
+        where = ("at the feed" if cm.requirement_distance_m < 1e-6
+                 else f"at {format_length(cm.requirement_distance_m, units, 2)}")
+        if req.status == MET:
+            text = f"none, already under {target}"
+            tip = f"Without a choke here the shield current peaks at {req.unchoked_ratio * 100:.1f} %."
+        elif req.status == NEEDS:
+            text = f"≥ {_fmt_ohm(req.resistance_ohm)} {where}"
+            tip = (f"Resistive choke impedance that keeps the shield current under {target} of "
+                   f"the antenna current (ferrite chokes are mostly resistive). Without a "
+                   f"choke: {req.unchoked_ratio * 100:.1f} %; with a perfect one: "
+                   f"{req.perfect_ratio * 100:.1f} %.")
+        else:
+            text = f"a choke alone is not enough: {req.perfect_ratio * 100:.1f} % remains"
+            tip = (f"Even a perfect choke {where} leaves {req.perfect_ratio * 100:.1f} % on the "
+                   f"coax: the antenna's own field induces it. Route the coax away from the "
+                   f"antenna (at right angles, for at least λ/4) or add a second choke "
+                   f"further down.")
+        rows.append(("Choke needed", text, tip))
+        for label, along, z in cm.chokes:
+            if abs(z) >= PERFECT_CHOKE_OHM * 0.99:
+                value = "perfect"
+            else:
+                kind = "inductive" if z.imag >= 0 else "capacitive"
+                value = f"|Z| {_fmt_ohm(abs(z))}, {kind}"
+            rows.append((label, value, f"{_fmt_z(z)} at the design frequency, "
+                                       f"{format_length(along, units, 2)} from the feed"))
         return rows
 
     def _fill_issues(self):

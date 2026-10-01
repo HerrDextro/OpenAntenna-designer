@@ -12,7 +12,7 @@ from ..model.document import NODE_ANTENNA
 from ..model.params import ParamSpec
 from ..model.units import wavelength_m
 from .base import (EPS, SIDE, TOP, AntennaTemplate, BuildContext, CutItem, Dimension, Handle,
-                   Tunable, add_run, max_coil_uh, polar_point)
+                   Tunable, add_run, along_handle as _along, max_coil_uh, polar_point)
 
 if TYPE_CHECKING:
     from ..model.document import Project
@@ -56,6 +56,9 @@ class DipoleTemplate(AntennaTemplate):
         tip_a = polar_point(a["leg_length"], a["azimuth"], a["droop"] - a["tilt"], feed)
         tip_b = polar_point(a["leg_length"], a["azimuth"] + 180.0, a["droop"] + a["tilt"], feed)
         return a, feed, tip_a, tip_b
+
+    def feed_point(self, project: "Project"):
+        return (0.0, 0.0, project.antenna["height"])
 
     @staticmethod
     def _direction(feed, tip, length: float):
@@ -167,20 +170,3 @@ class DipoleTemplate(AntennaTemplate):
                                max_coil_uh(project.simulation["design_mhz"])))
         return out
 
-
-def _along(view: str, node_id: str, key: str, pos, direction, value: float,
-           label: str) -> Handle | None:
-    """Handle at `pos` that edits a length measured along `direction`.
-
-    Moving the handle by t along the leg's projection changes the value by t,
-    so the axis is the projected direction divided by its squared length. A
-    leg pointing almost straight at the viewer gets no handle in that view.
-    """
-    if view == SIDE:
-        dx, dy, at = direction[0], direction[2], (pos[0], pos[2])
-    else:
-        dx, dy, at = direction[0], direction[1], (pos[0], pos[1])
-    norm = dx * dx + dy * dy
-    if norm < 0.04:
-        return None
-    return Handle(view, node_id, key, at, (dx / norm, dy / norm), value, label)

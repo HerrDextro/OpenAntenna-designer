@@ -9,6 +9,7 @@ generically. Values are stored in base units:
     frequency              MHz
     inductance             microhenries
     resistance             ohms
+    percent                percent
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Any
 
 KINDS = {
     "length", "small_length", "angle", "frequency", "inductance", "resistance",
-    "float", "int", "bool", "choice",
+    "percent", "float", "int", "bool", "choice",
 }
 
 
@@ -34,6 +35,8 @@ class ParamSpec:
     help: str = ""
     # Only show this field when another field has one of the given values.
     visible_when: tuple[str, tuple[Any, ...]] | None = None
+    # ...and hide it while another field has one of the given values.
+    hidden_when: tuple[str, tuple[Any, ...]] | None = None
 
     def __post_init__(self):
         if self.kind not in KINDS:
@@ -56,6 +59,10 @@ class ParamSpec:
         return value
 
     def is_visible(self, values: dict[str, Any]) -> bool:
+        if self.hidden_when is not None:
+            key, hiding = self.hidden_when
+            if values.get(key) in hiding:
+                return False
         if self.visible_when is None:
             return True
         key, allowed = self.visible_when

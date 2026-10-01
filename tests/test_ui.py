@@ -507,3 +507,62 @@ def test_polar_plot_fits_any_widget_shape(app):
             assert x_lo <= -1 and x_hi >= 1, (half, width, height, x_lo, x_hi)
             assert y_hi >= 1 and y_lo <= (0 if half else -1), (half, width, height, y_lo, y_hi)
             plot.close()
+
+
+def test_feed_parts_live_under_the_feed_system(app, window):
+    from antennasim.model.document import NODE_FEEDLINE
+
+    ctl = window.ctl
+    act = window.part_actions["coax_run"]
+    assert act.isVisible() and not act.isEnabled()  # shield not modelled yet
+    ctl.set_value(NODE_FEEDLINE, "coax", "rg58")
+    ctl.set_value(NODE_FEEDLINE, "common_mode", True)
+    app.processEvents()
+    assert act.isEnabled()
+    ctl.add_part("coax_run", {"length": 2.0})
+    ctl.add_part("coax_run", {"length": 1.0, "slope": 90.0})
+    app.processEvents()
+    tree = window.tree
+    feed = next(tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
+                if tree.topLevelItem(i).data(0, 256) == NODE_FEEDLINE)
+    assert [feed.child(i).text(0) for i in range(feed.childCount())] == ["Coax run 1",
+                                                                         "Coax run 2"]
+    assert any(h.node_id == "coax_run2" for h in window.side_view._handles)
+    # Turning the shield off keeps the runs but greys them out.
+    ctl.set_value(NODE_FEEDLINE, "common_mode", False)
+    app.processEvents()
+    feed = next(tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
+                if tree.topLevelItem(i).data(0, 256) == NODE_FEEDLINE)
+    assert feed.childCount() == 2 and "Inactive" in feed.child(0).toolTip(0)
+    ctl.undo_stack.undo()
+    assert ctl.project.feedline["common_mode"]
+
+
+def test_no_stray_windows_flash_up(app, window):
+    # Any widget shown without a parent becomes its own top-level window and
+    # flashes on screen; the results panel once did this for every row.
+    from PySide6.QtCore import QEvent, QObject
+
+    stray = []
+
+    class Spy(QObject):
+        def eventFilter(self, obj, event):
+            if (event.type() == QEvent.Type.Show and hasattr(obj, "isWindow") and obj.isWindow()
+                    and obj is not window):
+                stray.append(type(obj).__name__)
+            return False
+
+    spy = Spy()
+    app.installEventFilter(spy)
+    try:
+        for _ in range(2):
+            window.run_simulation()
+            wait_for_run(app, window)
+        window.ctl.set_value(NODE_ANTENNA, "height", 5.5)
+        window.ctl.select(None)
+        window.save_reference()
+        window.run_simulation()
+        wait_for_run(app, window)
+    finally:
+        app.removeEventFilter(spy)
+    assert stray == []

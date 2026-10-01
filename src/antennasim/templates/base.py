@@ -64,6 +64,24 @@ class Handle:
     label: str
 
 
+def along_handle(view: str, node_id: str, key: str, pos: Vec3, direction: Vec3, value: float,
+                 label: str) -> Handle | None:
+    """Handle at `pos` that edits a length measured along `direction`.
+
+    Moving the handle by t along the projected direction changes the value by t,
+    so the axis is the projected direction divided by its squared length. A
+    wire pointing almost straight at the viewer gets no handle in that view.
+    """
+    if view == SIDE:
+        dx, dy, at = direction[0], direction[2], (pos[0], pos[2])
+    else:
+        dx, dy, at = direction[0], direction[1], (pos[0], pos[1])
+    norm = dx * dx + dy * dy
+    if norm < 0.04:
+        return None
+    return Handle(view, node_id, key, at, (dx / norm, dy / norm), value, label)
+
+
 @dataclass(frozen=True)
 class Dimension:
     view: str
@@ -158,6 +176,16 @@ class AntennaTemplate(ABC):
 
     def feed_is_grounded(self, project: "Project") -> bool:
         return False
+
+    def feed_point(self, project: "Project") -> Vec3 | None:
+        """Where the coax connects: the shield-side terminal of the feed.
+
+        The source sits on the first segment of the hot-side wire, so the
+        shield joins at that wire's start, together with the cold side (the
+        other dipole leg, or the radials). None if the template cannot be fed
+        from a coax that is modelled.
+        """
+        return None
 
     def handles(self, project: "Project") -> list[Handle]:
         return []

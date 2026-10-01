@@ -38,9 +38,14 @@ class Wire:
         return min(max(int(fraction * n) + 1, 1), n)
 
 
+SERIES = "series"  # R + L in series; R_total = r + X_L/q (loading coils, ground loss)
+PARALLEL = "parallel"  # R, L and C in parallel (a coil with self-capacitance)
+FIXED = "fixed"  # R + jX, the same at every frequency
+
+
 @dataclass
 class Load:
-    """Series RLC load on one segment. Resistance R_total = r + X_L/q."""
+    """Lumped load on one segment."""
 
     wire: int  # index into WireModel.wires
     fraction: float
@@ -49,9 +54,14 @@ class Load:
     q: float | None = None
     name: str = ""
     part_id: str = ""
+    kind: str = SERIES
+    c_pf: float = 0.0  # PARALLEL only
+    x_ohm: float = 0.0  # FIXED only
 
     def resistance_at(self, freq_mhz: float) -> float:
         r = self.r_ohm
+        if self.kind != SERIES:
+            return r
         if self.q and self.l_uh > 0:
             r += 2 * math.pi * freq_mhz * 1e6 * self.l_uh * 1e-6 / self.q
         return r

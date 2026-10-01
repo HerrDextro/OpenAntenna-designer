@@ -51,3 +51,51 @@ def design_coil(inductance_uh: float, form_diameter_m: float, wire_diameter_m: f
 
 def reactance_ohm(inductance_uh: float, freq_mhz: float) -> float:
     return 2 * math.pi * freq_mhz * inductance_uh
+
+
+def medhurst_capacitance_pf(diameter_m: float, length_m: float) -> float:
+    """Self-capacitance of a single-layer solenoid.
+
+    Medhurst's measurements as fitted by D. W. Knight:
+    C = D (0.1126 l/D + 0.08 + 0.27 / sqrt(l/D)) pF, with D and l in cm.
+    """
+    d, l = diameter_m * 100, length_m * 100
+    ratio = max(l / d, 1e-3)
+    return d * (0.1126 * ratio + 0.08 + 0.27 / math.sqrt(ratio))
+
+
+@dataclass
+class AirChoke:
+    """Coax wound on a form: an inductor with self-capacitance, i.e. a parallel RLC."""
+
+    turns: int
+    mean_diameter_m: float
+    coil_length_m: float
+    coax_length_m: float  # coax used for the winding
+    inductance_uh: float
+    capacitance_pf: float
+    resistance_ohm: float  # parallel loss resistance
+
+    @property
+    def self_resonance_mhz(self) -> float:
+        return 1.0 / (2 * math.pi * math.sqrt(self.inductance_uh * 1e-6
+                                              * self.capacitance_pf * 1e-12)) / 1e6
+
+    def impedance(self, freq_mhz: float) -> complex:
+        w = 2 * math.pi * freq_mhz * 1e6
+        admittance = (1 / self.resistance_ohm + 1 / (1j * w * self.inductance_uh * 1e-6)
+                      + 1j * w * self.capacitance_pf * 1e-12)
+        return 1 / admittance
+
+
+def air_choke(turns: int, form_diameter_m: float, coax_diameter_m: float, q: float,
+              design_mhz: float) -> AirChoke:
+    """Close-wound coax choke. Self-capacitance is estimated for a wire solenoid;
+    coax windings usually have somewhat more, so the real choke resonates lower."""
+    mean = form_diameter_m + coax_diameter_m
+    length = turns * coax_diameter_m
+    inductance = wheeler_inductance_uh(turns, mean, length)
+    capacitance = medhurst_capacitance_pf(mean, length)
+    resistance = q * 2 * math.pi * design_mhz * inductance
+    return AirChoke(turns, mean, length, turns * math.pi * mean, inductance, capacitance,
+                    resistance)

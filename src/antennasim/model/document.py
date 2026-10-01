@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .params import ParamSpec, defaults
-from .parts import ENVIRONMENT_SPECS, FEEDLINE_SPECS, PART_TYPES, SIMULATION_SPECS
+from .parts import (ENVIRONMENT_SPECS, FEEDLINE_PART_KINDS, FEEDLINE_SPECS, PART_TYPES,
+                    SIMULATION_SPECS)
 
 FILE_VERSION = 1
 
@@ -120,10 +121,27 @@ class Project:
         found = self.parts_of(kind)
         return found[0] if found else None
 
+    def part_allowed(self, kind: str) -> bool:
+        """Whether this kind of part belongs on this design at all."""
+        return kind in self.template.allowed_parts or kind in FEEDLINE_PART_KINDS
+
+    def part_active(self, part: Part) -> bool:
+        """Feed-system parts only take part while the coax shield is modelled."""
+        return part.kind not in FEEDLINE_PART_KINDS or self.feedline["common_mode"]
+
     def can_add_part(self, kind: str) -> bool:
-        if kind not in self.template.allowed_parts:
+        if not self.part_allowed(kind):
+            return False
+        if kind in FEEDLINE_PART_KINDS and not self.feedline["common_mode"]:
             return False
         return len(self.parts_of(kind)) < PART_TYPES[kind].max_count
+
+    def part_label(self, part: Part) -> str:
+        """"Coax run 2" for parts that can appear several times, else the plain label."""
+        if part.type.max_count <= 1:
+            return part.label
+        same = self.parts_of(part.kind)
+        return f"{part.label} {same.index(part) + 1}" if part in same else part.label
 
     def add_part(self, kind: str, params: dict[str, Any] | None = None) -> Part:
         if not self.can_add_part(kind):

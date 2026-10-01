@@ -65,7 +65,56 @@ LOADING_COIL = PartType(
     ),
 )
 
-PART_TYPES: dict[str, PartType] = {p.kind: p for p in (RADIALS, TOP_HAT, LOADING_COIL)}
+COAX_RUN = PartType(
+    "coax_run",
+    "Coax run",
+    (
+        ParamSpec("length", "Length", "length", 1.0, minimum=0.01),
+        ParamSpec("azimuth", "Direction", "angle", 0.0, minimum=0.0, maximum=360.0,
+                  help="Compass direction of this run, seen from above."),
+        ParamSpec("slope", "Slope", "angle", 0.0, minimum=-90.0, maximum=90.0,
+                  help="0° is horizontal, 90° runs straight down, negative values climb."),
+    ),
+    max_count=12,
+)
+
+CHOKE = PartType(
+    "choke",
+    "Common-mode choke",
+    (
+        ParamSpec("distance", "Distance from feed", "length", 0.0, minimum=0.0,
+                  help="Position along the coax, measured from the feed point."),
+        ParamSpec("choke_type", "Type", "choice", "perfect",
+                  choices=(("perfect", "Perfect (blocks all common mode)"),
+                           ("impedance", "Known impedance (e.g. ferrite)"),
+                           ("air_coil", "Coax wound on a form (air core)"))),
+        ParamSpec("r_ohm", "Resistance", "resistance", 1000.0, minimum=0.0,
+                  help="Resistive part of the choke impedance at the design frequency. "
+                       "Ferrite chokes at HF are mostly resistive.",
+                  visible_when=("choke_type", ("impedance",))),
+        ParamSpec("x_ohm", "Reactance", "resistance", 0.0, minimum=-100000.0,
+                  help="Reactive part: positive is inductive, negative capacitive. Held "
+                       "constant across the sweep.",
+                  visible_when=("choke_type", ("impedance",))),
+        ParamSpec("turns", "Turns", "int", 8, minimum=1, maximum=100,
+                  visible_when=("choke_type", ("air_coil",))),
+        ParamSpec("form_diameter", "Form diameter", "small_length", 0.06, minimum=0.005,
+                  help="Outside diameter of the pipe or form the coax is wound on. "
+                       "Turns are assumed close wound.",
+                  visible_when=("choke_type", ("air_coil",))),
+        ParamSpec("q", "Coil Q", "float", 50.0, minimum=1.0, maximum=1000.0,
+                  help="Sets the loss, and so the peak impedance at self-resonance.",
+                  visible_when=("choke_type", ("air_coil",))),
+    ),
+    max_count=4,
+)
+
+PART_TYPES: dict[str, PartType] = {p.kind: p for p in (RADIALS, TOP_HAT, LOADING_COIL,
+                                                        COAX_RUN, CHOKE)}
+
+# Parts that belong to the feed system rather than the antenna. They work with
+# every template and are only active while the coax shield is modelled.
+FEEDLINE_PART_KINDS = ("coax_run", "choke")
 
 
 ENVIRONMENT_SPECS = (
@@ -96,7 +145,33 @@ FEEDLINE_SPECS = (
     ParamSpec("coax", "Feedline", "choice", "rg213",
               choices=(("none", "None"),) + tuple((k, c.label) for k, c in COAX.items())),
     ParamSpec("length", "Feedline length", "length", 20.0, minimum=0.0,
-              visible_when=("coax", tuple(COAX))),
+              visible_when=("coax", tuple(COAX)),
+              hidden_when=("common_mode", (True,))),
+    ParamSpec("common_mode", "Model coax shield (common mode)", "bool", False,
+              help="Adds the outside of the coax shield to the model as a wire, following "
+                   "the coax runs under Feed system, so current on the shield, its "
+                   "radiation and the effect of chokes are simulated."),
+    ParamSpec("radio_end", "Radio end", "choice", "floating",
+              choices=(("floating", "Floating (radio not earthed)"),
+                       ("earthed", "Earthed (wire to ground)")),
+              help="Floating: battery-powered or portable radio. Earthed: the radio "
+                   "chassis is wired straight down to ground.",
+              visible_when=("common_mode", (True,))),
+    ParamSpec("radio_height", "Radio height", "length", 1.0, minimum=0.05,
+              help="The coax ends at the radio, straight below or above the end of the "
+                   "last coax run.",
+              visible_when=("common_mode", (True,))),
+    ParamSpec("earth_resistance", "Earth connection resistance", "resistance", 0.0,
+              minimum=0.0, help="Resistance of the ground rod or earth lead connection.",
+              visible_when=("radio_end", ("earthed",))),
+    ParamSpec("extra_length", "Extra coax at the radio", "length", 0.0, minimum=0.0,
+              help="Coax beyond the modelled route, e.g. coiled up at the radio. Counts for "
+                   "feedline loss and impedance transformation only.",
+              visible_when=("common_mode", (True,))),
+    ParamSpec("cm_target", "Common-mode target", "percent", 10.0, minimum=0.1, maximum=100.0,
+              help="Largest acceptable current on the coax shield, in % of the antenna "
+                   "current. 10 % (−20 dB) is a common rule of thumb.",
+              visible_when=("common_mode", (True,))),
 )
 
 SIMULATION_SPECS = (

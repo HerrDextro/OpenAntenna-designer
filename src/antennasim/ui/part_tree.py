@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QMenu, QTreeWidget, QTreeWidgetItem
 
 from ..model.document import NODE_ANTENNA, NODE_ENVIRONMENT, NODE_FEEDLINE, NODE_SIMULATION
+from ..model.parts import FEEDLINE_PART_KINDS
 from .actions import populate_part_menu
 from .controller import DocumentController
 
@@ -21,6 +23,8 @@ class PartTree(QTreeWidget):
         self.customContextMenuRequested.connect(self._context_menu)
         self.itemSelectionChanged.connect(self._on_select)
         ctl.structure_changed.connect(lambda _: self.rebuild())
+        # Feed-system parts grey out and come back with the shield toggle.
+        ctl.value_changed.connect(lambda _node, key: key == "common_mode" and self.rebuild())
         ctl.selection_changed.connect(self._select_node)
         self._updating = False
         self.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
@@ -33,16 +37,26 @@ class PartTree(QTreeWidget):
         antenna = QTreeWidgetItem([project.template.name])
         antenna.setData(0, _ROLE, NODE_ANTENNA)
         self.addTopLevelItem(antenna)
-        for part in project.parts:
-            item = QTreeWidgetItem([part.label])
-            item.setData(0, _ROLE, part.id)
-            antenna.addChild(item)
+        nodes = {}
         for node, label in ((NODE_ENVIRONMENT, "Ground & materials"),
                             (NODE_FEEDLINE, "Feed system"),
                             (NODE_SIMULATION, "Frequencies")):
             item = QTreeWidgetItem([label])
             item.setData(0, _ROLE, node)
             self.addTopLevelItem(item)
+            nodes[node] = item
+        # Coax runs and chokes hang under the feed system; they are kept, greyed
+        # out, while the shield is not modelled.
+        for part in project.parts:
+            item = QTreeWidgetItem([project.part_label(part)])
+            item.setData(0, _ROLE, part.id)
+            if part.kind in FEEDLINE_PART_KINDS:
+                nodes[NODE_FEEDLINE].addChild(item)
+                if not project.part_active(part):
+                    item.setForeground(0, QBrush(QColor("#9a9a9a")))
+                    item.setToolTip(0, "Inactive: turn on 'Model coax shield' in Feed system")
+            else:
+                antenna.addChild(item)
         self.expandAll()
         self._updating = False
         self._select_node(self.ctl.selected)
