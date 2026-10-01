@@ -221,3 +221,26 @@ def test_wider_droop_range_allows_upward_slopes():
     assert p.part("radials1").params["droop"] == pytest.approx(-75.0)
     tips = [w.p2[2] for w in build(p).model.wires if w.name.startswith("Radial")]
     assert all(t > p.antenna["feed_height"] for t in tips)  # radials slope upward
+
+
+def test_segment_length_respects_size_and_wire_thickness():
+    from antennasim.geometry.segmentation import (MIN_SEGMENT_PER_RADIUS, SEGMENTS_ACROSS,
+                                                  choose_segment_length, model_size)
+
+    # Electrically large: the wavelength rule governs.
+    big = build(Project.new("monopole")).model
+    lam_rule = wavelength_m(15.0) / 20
+    assert choose_segment_length(big, 15.0, 20) <= lam_rule + 1e-12
+
+    # Physically small: at least SEGMENTS_ACROSS across the antenna.
+    small = grounded_vertical(height=0.8, ground="perfect")
+    model = build(small).model
+    seg = model.wires[0].length / model.wires[0].segments
+    assert seg <= model_size(model) / SEGMENTS_ACROSS + 1e-9
+
+    # A fat tube is never cut into segments shorter than the thin-wire limit allows.
+    fat = grounded_vertical(height=0.8, ground="perfect")
+    fat.antenna["diameter"] = 0.1
+    fat_model = build(fat).model
+    fat_seg = fat_model.wires[0].length / fat_model.wires[0].segments
+    assert fat_seg >= MIN_SEGMENT_PER_RADIUS * 0.05 - 1e-9

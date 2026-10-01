@@ -13,7 +13,7 @@ from .analysis.feedline import FeedResult, apply_feed_system
 from .analysis.ground_loss import estimate_ground_loss
 from .analysis.swr import bandwidth, resonances, swr
 from .analysis.tuner import TuneResult, find_resonance
-from .geometry.segmentation import segment, target_segment_length
+from .geometry.segmentation import choose_segment_length, segment, target_segment_length
 from .geometry.validation import ERROR, INFO, Issue, ground_dependence, validate_model
 from .geometry.wire_model import GroundModel, Load, WireModel
 from .model.document import NODE_ENVIRONMENT, NODE_SIMULATION, Project
@@ -62,7 +62,11 @@ def build(project: Project) -> BuiltModel:
     spw = sim["segments_per_wavelength"]
 
     issues += template.validate(project)
-    model = template.build(project, BuildContext(target_segment_length(f_max, spw)))
+    # Build once to measure the antenna, then again with the segment length that
+    # suits its size: coil wires are one segment long, so they depend on it.
+    draft = template.build(project, BuildContext(target_segment_length(f_max, spw)))
+    seg_length = choose_segment_length(draft, f_max, spw)
+    model = template.build(project, BuildContext(seg_length))
 
     if env["ground"] == "real":
         soil = GROUNDS[env["soil"]]
@@ -71,7 +75,7 @@ def build(project: Project) -> BuiltModel:
         ground = GroundModel(env["ground"])
     model.ground = ground
     model.conductivity = CONDUCTORS[env["conductor"]][1]
-    segment(model, f_max, spw)
+    segment(model, seg_length)
 
     solve_ground = ground
     ground_loss = None

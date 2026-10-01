@@ -106,7 +106,9 @@ SIMULATION_SPECS = (
     ParamSpec("sweep_points", "Sweep points", "int", 31, minimum=2, maximum=401),
     ParamSpec("segments_per_wavelength", "Segments per wavelength", "int", 20,
               minimum=10, maximum=100,
-              help="Higher is more accurate and slower. 20 is a good default."),
+              help="Higher is more accurate and slower. 20 is a good default. Physically "
+                   "small antennas also get at least 40 segments across their size, "
+                   "whatever this is set to."),
     ParamSpec("swr_threshold", "SWR bandwidth threshold", "float", 2.0,
               minimum=1.1, maximum=10.0),
 )

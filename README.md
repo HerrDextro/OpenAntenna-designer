@@ -15,7 +15,7 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
 ### Design
 - **Antenna types you choose.** Two families so far:
   - **Monopole / vertical:** ground-mounted or elevated verticals, and inverted L / L hang.
-  - **Dipole:** flat dipole, inverted V, and slopers by direction.
+  - **Dipole:** flat, inverted V, sloping or vertical, set by a single tilt angle (0° flat, 90° vertical).
 - **Parts:**
   - radials, modeled as wires or buried in the ground
   - capacitive top hats, with optional perimeter ring
@@ -135,6 +135,7 @@ Project (.antsim) → Template → 3D wire model → Model checks
   - Each frequency is solved in its own block, so frequency-dependent losses (coil resistance = X_L / Q) are correct across the sweep.
   - The solver sits behind an interface and can be swapped out.
 - **Far-field patterns** (`src/antennasim/analysis/farfield.py`) are computed from the NEC segment currents using the reflection-coefficient ground model. The test suite checks them against NEC's own output; they agree within 0.02 dB.
+- **Segmentation** (`src/antennasim/geometry/segmentation.py`) uses the finer of two rules: a fraction of a wavelength, and at least 40 segments across the antenna's own size. The second matters for short loaded antennas, where the wavelength rule alone gave a 0.29 λ loaded dipole 8 segments and tuned its coils 8% high.
 - **Ground-mounted verticals over real soil:** NEC2 cannot connect a wire to lossy ground. For these, the current solution uses perfect ground plus a ground-loss resistance at the feed point, while the pattern still uses the real soil. Elevated antennas use NEC2's full Sommerfeld real-ground solution.
 - **Tuning** (`src/antennasim/analysis/tuner.py`) scans upward and takes the first negative-to-positive crossing of reactance. Element length runs through a fundamental resonance, then an antiresonance (a pole, not a zero), then higher-order resonances, so simply bracketing a sign change lands on the wrong one.
 
@@ -167,7 +168,7 @@ The suite runs the real solver and the real UI (offscreen). It covers NEC2 refer
 ## Roadmap
 
 - [x] **V1:** monopole / vertical, inverted L, radials, top hat, loading coil
-- [x] Dipole and inverted V, with symmetric loading coils
+- [x] Dipole: flat, inverted V, sloper and vertical, with symmetric loading coils
 - [ ] Fan dipole and traps
 - [ ] End-fed / random wire with unun
 - [ ] Loops: resonant loop (quad / delta) and magnetic loop (with capacitor voltage and efficiency)

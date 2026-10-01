@@ -45,7 +45,11 @@ def validate_model(model: WireModel, freq_min_mhz: float, freq_max_mhz: float) -
             reported.add((msg, node))
             issues.append(Issue(level, msg, node))
 
-    for w in model.wires:
+    # Single-segment wires that carry a load (loading coils) are modelling
+    # stand-ins one segment long; their length/radius says nothing physical.
+    load_carriers = {load.wire for load in model.loads}
+
+    for index, w in enumerate(model.wires):
         if w.length < 1e-6:
             once(ERROR, f"{w.name}: zero-length wire.", w.part_id)
             continue
@@ -64,7 +68,8 @@ def validate_model(model: WireModel, freq_min_mhz: float, freq_max_mhz: float) -
         elif seg < 8 * w.radius:
             once(INFO, f"{w.name}: segment length / radius below 8, accuracy is reduced.",
                  w.part_id)
-        if w.length / w.radius < 30:
+        stand_in = index in load_carriers and w.segments == 1
+        if w.length / w.radius < 30 and not stand_in:
             once(WARNING, f"{w.name}: very fat conductor for its length.", w.part_id)
 
     # Segment length ratio at junctions.
