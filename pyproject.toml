@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "antennasim"
-version = "0.1.0"
+version = "0.2.0"
 description = "Parametric antenna design with NEC2 simulation"
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
@@ -15,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+release = ["pyinstaller>=6.10"]
 
 [project.scripts]
 antennasim = "antennasim.app:main"

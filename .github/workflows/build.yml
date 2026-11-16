@@ -1,0 +1,88 @@
+# Test and package AntennaSim for Windows.
+#
+# Every push to main and every pull request: build the solver, run the tests,
+# and build the Windows zip (downloadable from the run's Artifacts for 90 days).
+# Pushing a tag like v0.2.0 also publishes that zip as a GitHub Release.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      # gcc for the NEC2 solver. The runner's own MinGW is not guaranteed on
+      # every Windows image, so install a known one.
+      - name: Install MinGW gcc
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
+          update: false
+
+      - name: Put gcc on PATH
+        run: Add-Content $env:GITHUB_PATH "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin"
+
+      - name: Build nec2c
+        run: python third_party/build_nec2c.py
+
+      - name: Install AntennaSim
+        run: python -m pip install -e ".[dev,release]"
+
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Package
+        id: package
+        run: python packaging/build_release.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AntennaSim-${{ steps.package.outputs.version }}-windows-x64
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # only this job may create the release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AntennaSim-${{ needs.build.outputs.version }}-windows-x64
+
+      # Tags with a suffix (v0.2.0-rc1) become pre-releases, so they never show
+      # up as the "Latest" download.
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}" *.zip
+          --repo "${{ github.repository }}"
+          --title "AntennaSim ${{ needs.build.outputs.version }}"
+          --generate-notes
+          ${{ contains(github.ref_name, '-') && '--prerelease' || '' }}

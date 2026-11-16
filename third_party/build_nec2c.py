@@ -1,7 +1,7 @@
 """Build the vendored nec2c solver into bin/nec2c(.exe).
 
-nec2c is GPL-2 licensed and is run by AntennaSim as a separate process, so the
-application itself is not bound by its license.
+nec2c is licensed under the GPL v3 (see nec2c/COPYING) and is run by AntennaSim
+as a separate process, so the application itself is not bound by its license.
 
 Usage:  python third_party/build_nec2c.py
 """

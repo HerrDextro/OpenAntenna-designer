@@ -87,11 +87,19 @@ Behind the diagram is a real electromagnetic simulation: the proven **NEC2** eng
 
 ## Getting started
 
-### Requirements
+### Download (Windows)
+
+Download `AntennaSim-<version>-windows-x64.zip` from the [Releases page](https://github.com/HerrDextro/OpenAntenna-designer/releases), unzip it anywhere and run `AntennaSim.exe`. Python is not needed.
+
+Builds of the latest commit on `main` are under the repository's **Actions** tab: open the newest successful *Build* run and download the zip under **Artifacts**. These are development builds and are kept for 90 days.
+
+### Run from source
+
+Requirements:
 - Python 3.11 or newer
 - A C compiler (gcc) to build the NEC2 solver. On Windows, [WinLibs MinGW-w64](https://winlibs.com/) works well.
 
-### Install and run
+Then:
 
 ```bash
 git clone https://github.com/HerrDextro/OpenAntenna-designer.git
@@ -178,7 +186,24 @@ third_party/   nec2c source + build script
 python -m pytest
 ```
 
-The suite runs the real solver and the real UI (offscreen). It covers NEC2 reference cases (a quarter-wave monopole gives about 36 Ω, a half-wave dipole about 73 Ω), far-field agreement with NEC's own pattern output, the analysis maths, both templates, common mode (including the choke requirement against a direct simulation), and UI behaviour including tuning, comparisons and recovery from solver failures.
+GitHub Actions runs the whole suite on Windows for every push and pull request (`.github/workflows/build.yml`). The suite runs the real solver and the real UI (offscreen). It covers NEC2 reference cases (a quarter-wave monopole gives about 36 Ω, a half-wave dipole about 73 Ω), far-field agreement with NEC's own pattern output, the analysis maths, both templates, common mode (including the choke requirement against a direct simulation), and UI behaviour including tuning, comparisons and recovery from solver failures.
+
+### Making a release
+
+1. Set the new version in `pyproject.toml` (e.g. `0.2.0`) and commit it.
+2. Tag that commit and push the tag:
+
+   ```bash
+   git tag v0.2.0
+   ```
+
+   ```bash
+   git push origin v0.2.0
+   ```
+
+3. CI builds the solver, runs the tests, packages the app with PyInstaller and publishes a GitHub Release with the zip attached.
+
+To build the same zip locally: `pip install -e ".[release]"`, then `python packaging/build_release.py`.
 
 ---
 
@@ -192,7 +217,8 @@ The suite runs the real solver and the real UI (offscreen). It covers NEC2 refer
 - [ ] End-fed / random wire with unun
 - [ ] Loops: resonant loop (quad / delta) and magnetic loop (with capacitor voltage and efficiency)
 - [ ] Bowtie, discone, halo
-- [ ] Windows installer
+- [x] Windows builds published automatically for each release
+- [ ] Windows installer (setup.exe, Start menu entry, file association)
 
 ## Accuracy notes
 
@@ -207,4 +233,6 @@ Treat simulated results as a strong starting point, not a guarantee. Nearby obje
 
 ## License
 
-The bundled NEC2 engine in `third_party/nec2c` is licensed under the GNU GPL v2 (see `third_party/nec2c/COPYING`). It is built as a separate executable and called as an external process.
+AntennaSim is free to use, study, modify and share, including at work, under the **MIT license with the [Commons Clause](https://commonsclause.com/)** (see `LICENSE`). The Commons Clause adds one restriction: you may not sell it, meaning you may not charge for a product or service whose value comes entirely or substantially from AntennaSim, including paid hosting or support for it. Because of that restriction this is *source-available* rather than open source in the OSI sense.
+
+Bundled components keep their own licenses (see `THIRD_PARTY_NOTICES.md`). In particular, the NEC2 engine in `third_party/nec2c` is licensed under the **GNU GPL v3** (see `third_party/nec2c/COPYING`). It is built as a separate executable and called as an external process, and its full source is included in every release.
